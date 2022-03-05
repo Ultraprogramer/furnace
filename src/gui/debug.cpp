@@ -29,6 +29,8 @@
 #include "../engine/platform/arcade.h"
 #include "../engine/platform/ym2610.h"
 #include "../engine/platform/ym2610ext.h"
+#include "../engine/platform/ym2610b.h"
+#include "../engine/platform/ym2610bext.h"
 #include "../engine/platform/ay.h"
 #include "../engine/platform/ay8930.h"
 #include "../engine/platform/tia.h"
@@ -220,12 +222,6 @@ void putDispatchChan(void* data, int chanNum, int type) {
       ImGui::Text("- outVol: %.2x",ch->outVol);
       ImGui::Text("- chVolL: %.2x",ch->chVolL);
       ImGui::Text("- chVolR: %.2x",ch->chVolR);
-      ImGui::Text("* PCM:");
-      ImGui::Text(" - sample: %d",ch->pcm.sample);
-      ImGui::Text(" - pos: %d",ch->pcm.pos>>8);
-      ImGui::Text(" - subPos: %d",ch->pcm.pos&0xff);
-      ImGui::Text(" - len: %d",ch->pcm.len);
-      ImGui::Text(" - freq: %.2x",ch->pcm.freq);
       ImGui::TextColored(ch->active?colorOn:colorOff,">> Active");
       ImGui::TextColored(ch->insChanged?colorOn:colorOff,">> InsChanged");
       ImGui::TextColored(ch->freqChanged?colorOn:colorOff,">> FreqChanged");

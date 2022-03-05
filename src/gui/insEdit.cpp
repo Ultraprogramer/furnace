@@ -24,9 +24,10 @@
 #include "guiConst.h"
 #include "intConst.h"
 #include <fmt/printf.h>
+#include <imgui.h>
 #include "plot_nolerp.h"
 
-const char* insTypes[23]={
+const char* insTypes[24]={
   "Standard",
   "FM (4-operator)",
   "Game Boy",
@@ -49,20 +50,21 @@ const char* insTypes[23]={
   "FM (OPZ)",
   "POKEY",
   "PC Beeper",
-  "WonderSwan"
+  "WonderSwan",
+  "Atari Lynx"
 };
 
 const char* ssgEnvTypes[8]={
   "Down Down Down", "Down.", "Down Up Down Up", "Down UP", "Up Up Up", "Up.", "Up Down Up Down", "Up DOWN"
 };
 
-const char* fmParamNames[3][16]={
-  {"Algorithm", "Feedback", "LFO > Freq", "LFO > Amp", "Attack", "Decay", "Decay 2", "Release", "Sustain", "Level", "EnvScale", "Multiplier", "Detune", "Detune 2", "SSG-EG", "AM"},
-  {"ALG", "FB", "FMS/PMS", "AMS", "AR", "DR", "SR", "RR", "SL", "TL", "KS", "MULT", "DT", "DT2", "SSG-EG", "AM"},
-  {"ALG", "FB", "FMS/PMS", "AMS", "AR", "DR", "D2R", "RR", "SL", "TL", "RS", "MULT", "DT", "DT2", "SSG-EG", "AM"}
+const char* fmParamNames[3][27]={
+  {"Algorithm", "Feedback", "LFO > Freq", "LFO > Amp", "Attack", "Decay", "Decay 2", "Release", "Sustain", "Level", "EnvScale", "Multiplier", "Detune", "Detune 2", "SSG-EG", "AM", "AM Depth", "Vibrato Depth", "Sustained", "Sustained", "Level Scaling", "Sustain", "Vibrato", "Waveform", "Key Scale Rate", "OP2 Half Sine", "OP1 Half Sine"},
+  {"ALG", "FB", "FMS/PMS", "AMS", "AR", "DR", "SR", "RR", "SL", "TL", "KS", "MULT", "DT", "DT2", "SSG-EG", "AM", "AMD", "FMD", "EGT", "EGT", "KSL", "SUS", "VIB", "WS", "KSR", "DC", "DM"},
+  {"ALG", "FB", "FMS/PMS", "AMS", "AR", "DR", "D2R", "RR", "SL", "TL", "RS", "MULT", "DT", "DT2", "SSG-EG", "AM", "DAM", "DVB", "EGT", "EGS", "KSL", "SUS", "VIB", "WS", "KSR", "DC", "DM"}
 };
 
-const char* opllInsNames[18]={
+const char* opllInsNames[17]={
   "User",
   "Violin",
   "Guitar",
@@ -79,7 +81,7 @@ const char* opllInsNames[18]={
   "Synth Bass",
   "Acoustic Bass",
   "Electric Guitar",
-  "Drums (compatibility only!)"
+  "Drums"
 };
 
 enum FMParams {
@@ -98,7 +100,18 @@ enum FMParams {
   FM_DT=12,
   FM_DT2=13,
   FM_SSG=14,
-  FM_AM=15
+  FM_AM=15,
+  FM_DAM=16,
+  FM_DVB=17,
+  FM_EGT=18,
+  FM_EGS=19,
+  FM_KSL=20,
+  FM_SUS=21,
+  FM_VIB=22,
+  FM_WS=23,
+  FM_KSR=24,
+  FM_DC=25,
+  FM_DM=26
 };
 
 #define FM_NAME(x) fmParamNames[settings.fmNames][x]
@@ -129,6 +142,14 @@ const char* filtModeBits[5]={
 
 const char* c64SpecialBits[3]={
   "sync", "ring", NULL
+};
+
+const char* mikeyFeedbackBits[11] = {
+  "0", "1", "2", "3", "4", "5", "7", "10", "11", "int", NULL
+};
+
+const char* oneBit[2]={
+  "on", NULL
 };
 
 const int orderedOps[4]={
@@ -166,6 +187,13 @@ String macroLFOWaves(int id, float val) {
   return "???";
 }
 
+void addAALine(ImDrawList* dl, const ImVec2& p1, const ImVec2& p2, const ImU32 color, float thickness=1.0f) {
+  ImVec2 pt[2];
+  pt[0]=p1;
+  pt[1]=p2;
+  dl->AddPolyline(pt,2,color,ImDrawFlags_None,thickness);
+}
+
 void FurnaceGUI::drawAlgorithm(unsigned char alg, FurnaceGUIFMAlgs algType, const ImVec2& size) {
   ImDrawList* dl=ImGui::GetWindowDrawList();
   ImGuiWindow* window=ImGui::GetCurrentWindow();
@@ -182,7 +210,6 @@ void FurnaceGUI::drawAlgorithm(unsigned char alg, FurnaceGUIFMAlgs algType, cons
   ImGui::ItemSize(size,style.FramePadding.y);
   if (ImGui::ItemAdd(rect,ImGui::GetID("alg"))) {
     ImGui::RenderFrame(rect.Min,rect.Max,ImGui::GetColorU32(ImGuiCol_FrameBg),true,style.FrameRounding);
-    //ImReallyTiredOfThisGarbage();
     const float circleRadius=6.0f*dpiScale+1.0f;
     switch (algType) {
       case FM_ALGS_4OP:
@@ -194,11 +221,11 @@ void FurnaceGUI::drawAlgorithm(unsigned char alg, FurnaceGUIFMAlgs algType, cons
             ImVec2 pos4=ImLerp(rect.Min,rect.Max,ImVec2(0.8,0.5));
             dl->AddCircleFilled(pos1,4.0f*dpiScale+1.0f,color);
             dl->AddCircle(pos1,6.0f*dpiScale+1.0f,color);
-            dl->AddLine(pos1,pos2,colorL);
+            addAALine(dl,pos1,pos2,colorL);
             dl->AddCircleFilled(pos2,4.0f*dpiScale+1.0f,color);
-            dl->AddLine(pos2,pos3,colorL);
+            addAALine(dl,pos2,pos3,colorL);
             dl->AddCircleFilled(pos3,4.0f*dpiScale+1.0f,color);
-            dl->AddLine(pos3,pos4,colorL);
+            addAALine(dl,pos3,pos4,colorL);
             dl->AddCircleFilled(pos4,4.0f*dpiScale+1.0f,color);
 
             pos1.x-=ImGui::CalcTextSize("1").x*0.5;
@@ -222,11 +249,11 @@ void FurnaceGUI::drawAlgorithm(unsigned char alg, FurnaceGUIFMAlgs algType, cons
             ImVec2 pos4=ImLerp(rect.Min,rect.Max,ImVec2(0.75,0.5));
             dl->AddCircleFilled(pos1,4.0f*dpiScale+1.0f,color);
             dl->AddCircle(pos1,6.0f*dpiScale+1.0f,color);
-            dl->AddLine(pos1,pos3,colorL);
+            addAALine(dl,pos1,pos3,colorL);
             dl->AddCircleFilled(pos2,4.0f*dpiScale+1.0f,color);
-            dl->AddLine(pos2,pos3,colorL);
+            addAALine(dl,pos2,pos3,colorL);
             dl->AddCircleFilled(pos3,4.0f*dpiScale+1.0f,color);
-            dl->AddLine(pos3,pos4,colorL);
+            addAALine(dl,pos3,pos4,colorL);
             dl->AddCircleFilled(pos4,4.0f*dpiScale+1.0f,color);
 
             pos2.x-=ImGui::CalcTextSize("2").x+circleRadius+3.0*dpiScale;
@@ -250,11 +277,11 @@ void FurnaceGUI::drawAlgorithm(unsigned char alg, FurnaceGUIFMAlgs algType, cons
             ImVec2 pos4=ImLerp(rect.Min,rect.Max,ImVec2(0.75,0.5));
             dl->AddCircleFilled(pos1,4.0f*dpiScale+1.0f,color);
             dl->AddCircle(pos1,6.0f*dpiScale+1.0f,color);
-            dl->AddLine(pos1,pos4,colorL);
+            addAALine(dl,pos1,pos4,colorL);
             dl->AddCircleFilled(pos2,4.0f*dpiScale+1.0f,color);
-            dl->AddLine(pos2,pos3,colorL);
+            addAALine(dl,pos2,pos3,colorL);
             dl->AddCircleFilled(pos3,4.0f*dpiScale+1.0f,color);
-            dl->AddLine(pos3,pos4,colorL);
+            addAALine(dl,pos3,pos4,colorL);
             dl->AddCircleFilled(pos4,4.0f*dpiScale+1.0f,color);
 
             pos1.x-=ImGui::CalcTextSize("2").x+circleRadius+3.0*dpiScale;
@@ -278,11 +305,11 @@ void FurnaceGUI::drawAlgorithm(unsigned char alg, FurnaceGUIFMAlgs algType, cons
             ImVec2 pos4=ImLerp(rect.Min,rect.Max,ImVec2(0.75,0.5));
             dl->AddCircleFilled(pos1,4.0f*dpiScale+1.0f,color);
             dl->AddCircle(pos1,6.0f*dpiScale+1.0f,color);
-            dl->AddLine(pos1,pos2,colorL);
+            addAALine(dl,pos1,pos2,colorL);
             dl->AddCircleFilled(pos2,4.0f*dpiScale+1.0f,color);
-            dl->AddLine(pos2,pos4,colorL);
+            addAALine(dl,pos2,pos4,colorL);
             dl->AddCircleFilled(pos3,4.0f*dpiScale+1.0f,color);
-            dl->AddLine(pos3,pos4,colorL);
+            addAALine(dl,pos3,pos4,colorL);
             dl->AddCircleFilled(pos4,4.0f*dpiScale+1.0f,color);
 
             pos1.x-=ImGui::CalcTextSize("2").x+circleRadius+3.0*dpiScale;
@@ -307,13 +334,13 @@ void FurnaceGUI::drawAlgorithm(unsigned char alg, FurnaceGUIFMAlgs algType, cons
             ImVec2 pos5=ImLerp(rect.Min,rect.Max,ImVec2(0.75,0.5));
             dl->AddCircleFilled(pos1,4.0f*dpiScale+1.0f,color);
             dl->AddCircle(pos1,6.0f*dpiScale+1.0f,color);
-            dl->AddLine(pos1,pos2,colorL);
+            addAALine(dl,pos1,pos2,colorL);
             dl->AddCircleFilled(pos2,4.0f*dpiScale+1.0f,color);
             dl->AddCircleFilled(pos3,4.0f*dpiScale+1.0f,color);
-            dl->AddLine(pos3,pos4,colorL);
+            addAALine(dl,pos3,pos4,colorL);
             dl->AddCircleFilled(pos4,4.0f*dpiScale+1.0f,color);
-            dl->AddLine(pos2,pos5,colorL);
-            dl->AddLine(pos4,pos5,colorL);
+            addAALine(dl,pos2,pos5,colorL);
+            addAALine(dl,pos4,pos5,colorL);
 
             pos1.x-=ImGui::CalcTextSize("2").x+circleRadius+3.0*dpiScale;
             pos2.x-=ImGui::CalcTextSize("2").x+circleRadius+3.0*dpiScale;
@@ -337,15 +364,15 @@ void FurnaceGUI::drawAlgorithm(unsigned char alg, FurnaceGUIFMAlgs algType, cons
             ImVec2 pos5=ImLerp(rect.Min,rect.Max,ImVec2(0.75,0.5));
             dl->AddCircleFilled(pos1,4.0f*dpiScale+1.0f,color);
             dl->AddCircle(pos1,6.0f*dpiScale+1.0f,color);
-            dl->AddLine(pos1,pos2,colorL);
-            dl->AddLine(pos1,pos3,colorL);
-            dl->AddLine(pos1,pos4,colorL);
+            addAALine(dl,pos1,pos2,colorL);
+            addAALine(dl,pos1,pos3,colorL);
+            addAALine(dl,pos1,pos4,colorL);
             dl->AddCircleFilled(pos2,4.0f*dpiScale+1.0f,color);
             dl->AddCircleFilled(pos3,4.0f*dpiScale+1.0f,color);
             dl->AddCircleFilled(pos4,4.0f*dpiScale+1.0f,color);
-            dl->AddLine(pos2,pos5,colorL);
-            dl->AddLine(pos3,pos5,colorL);
-            dl->AddLine(pos4,pos5,colorL);
+            addAALine(dl,pos2,pos5,colorL);
+            addAALine(dl,pos3,pos5,colorL);
+            addAALine(dl,pos4,pos5,colorL);
 
             pos1.x-=ImGui::CalcTextSize("2").x+circleRadius+3.0*dpiScale;
             pos2.x-=ImGui::CalcTextSize("2").x+circleRadius+3.0*dpiScale;
@@ -369,13 +396,13 @@ void FurnaceGUI::drawAlgorithm(unsigned char alg, FurnaceGUIFMAlgs algType, cons
             ImVec2 pos5=ImLerp(rect.Min,rect.Max,ImVec2(0.75,0.5));
             dl->AddCircleFilled(pos1,4.0f*dpiScale+1.0f,color);
             dl->AddCircle(pos1,6.0f*dpiScale+1.0f,color);
-            dl->AddLine(pos1,pos2,colorL);
+            addAALine(dl,pos1,pos2,colorL);
             dl->AddCircleFilled(pos2,4.0f*dpiScale+1.0f,color);
             dl->AddCircleFilled(pos3,4.0f*dpiScale+1.0f,color);
             dl->AddCircleFilled(pos4,4.0f*dpiScale+1.0f,color);
-            dl->AddLine(pos2,pos5,colorL);
-            dl->AddLine(pos3,pos5,colorL);
-            dl->AddLine(pos4,pos5,colorL);
+            addAALine(dl,pos2,pos5,colorL);
+            addAALine(dl,pos3,pos5,colorL);
+            addAALine(dl,pos4,pos5,colorL);
 
             pos1.x-=ImGui::CalcTextSize("2").x+circleRadius+3.0*dpiScale;
             pos2.x-=ImGui::CalcTextSize("2").x+circleRadius+3.0*dpiScale;
@@ -402,10 +429,10 @@ void FurnaceGUI::drawAlgorithm(unsigned char alg, FurnaceGUIFMAlgs algType, cons
             dl->AddCircleFilled(pos2,4.0f*dpiScale+1.0f,color);
             dl->AddCircleFilled(pos3,4.0f*dpiScale+1.0f,color);
             dl->AddCircleFilled(pos4,4.0f*dpiScale+1.0f,color);
-            dl->AddLine(pos1,pos5,colorL);
-            dl->AddLine(pos2,pos5,colorL);
-            dl->AddLine(pos3,pos5,colorL);
-            dl->AddLine(pos4,pos5,colorL);
+            addAALine(dl,pos1,pos5,colorL);
+            addAALine(dl,pos2,pos5,colorL);
+            addAALine(dl,pos3,pos5,colorL);
+            addAALine(dl,pos4,pos5,colorL);
 
             pos1.x-=ImGui::CalcTextSize("2").x+circleRadius+3.0*dpiScale;
             pos2.x-=ImGui::CalcTextSize("2").x+circleRadius+3.0*dpiScale;
@@ -423,13 +450,48 @@ void FurnaceGUI::drawAlgorithm(unsigned char alg, FurnaceGUIFMAlgs algType, cons
           }
         }
         break;
+      case FM_ALGS_2OP_OPL:
+        switch (alg) {
+          case 0: { // 1 > 2
+            ImVec2 pos1=ImLerp(rect.Min,rect.Max,ImVec2(0.33,0.5));
+            ImVec2 pos2=ImLerp(rect.Min,rect.Max,ImVec2(0.67,0.5));
+            dl->AddCircleFilled(pos1,4.0f*dpiScale+1.0f,color);
+            dl->AddCircle(pos1,6.0f*dpiScale+1.0f,color);
+            addAALine(dl,pos1,pos2,colorL);
+            dl->AddCircleFilled(pos2,4.0f*dpiScale+1.0f,color);
+
+            pos1.x-=ImGui::CalcTextSize("2").x+circleRadius+3.0*dpiScale;
+            pos2.x+=circleRadius+3.0*dpiScale;
+            pos1.y-=ImGui::CalcTextSize("1").y*0.5;
+            pos2.y-=ImGui::CalcTextSize("2").y*0.5;
+            dl->AddText(pos1,color,"1");
+            dl->AddText(pos2,color,"2");
+            break;
+          }
+          case 1: { // 1 + 2
+            ImVec2 pos1=ImLerp(rect.Min,rect.Max,ImVec2(0.33,0.5));
+            ImVec2 pos2=ImLerp(rect.Min,rect.Max,ImVec2(0.67,0.5));
+            dl->AddCircleFilled(pos1,4.0f*dpiScale+1.0f,color);
+            dl->AddCircle(pos1,6.0f*dpiScale+1.0f,color);
+            dl->AddCircleFilled(pos2,4.0f*dpiScale+1.0f,color);
+
+            pos1.x-=ImGui::CalcTextSize("2").x+circleRadius+3.0*dpiScale;
+            pos2.x+=circleRadius+3.0*dpiScale;
+            pos1.y-=ImGui::CalcTextSize("1").y*0.5;
+            pos2.y-=ImGui::CalcTextSize("2").y*0.5;
+            dl->AddText(pos1,color,"1");
+            dl->AddText(pos2,color,"2");
+            break;
+          }
+        }
+        break;
       default:
         break;
     }
   }
 }
 
-void FurnaceGUI::drawFMEnv(unsigned char ar, unsigned char dr, unsigned char d2r, unsigned char rr, unsigned char sl, const ImVec2& size) {
+void FurnaceGUI::drawFMEnv(unsigned char tl, unsigned char ar, unsigned char dr, unsigned char d2r, unsigned char rr, unsigned char sl, float maxTl, float maxArDr, const ImVec2& size) {
   ImDrawList* dl=ImGui::GetWindowDrawList();
   ImGuiWindow* window=ImGui::GetCurrentWindow();
 
@@ -441,30 +503,60 @@ void FurnaceGUI::drawFMEnv(unsigned char ar, unsigned char dr, unsigned char d2r
   ImRect rect=ImRect(minArea,maxArea);
   ImGuiStyle& style=ImGui::GetStyle();
   ImU32 color=ImGui::GetColorU32(uiColors[GUI_COLOR_TEXT]);
-  ImU32 colorU=ImGui::GetColorU32(uiColors[GUI_COLOR_MACRO_OTHER]);
+  ImU32 colorS=ImGui::GetColorU32(uiColors[GUI_COLOR_SONG_LOOP]); //Relsease triangle and sustain horiz/vert line color
   ImGui::ItemSize(size,style.FramePadding.y);
   if (ImGui::ItemAdd(rect,ImGui::GetID("alg"))) {
     ImGui::RenderFrame(rect.Min,rect.Max,ImGui::GetColorU32(ImGuiCol_FrameBg),true,style.FrameRounding);
 
-    float arPos=float(31-ar)/31.0;
-    float drPos=arPos+(float(31-dr)/31.0);
-    float d2rPos=drPos+(float(31-d2r)/31.0);
-    float rrPos=d2rPos+(float(15-rr)/15.0);
+    //calculate x positions
+    float arPos=float(maxArDr-ar)/maxArDr; //peak of AR, start of DR
+    float drPos=arPos+((sl/15.0)*(float(maxArDr-dr)/maxArDr)); //end of DR, start of D2R
+    float d2rPos=drPos+(((15.0-sl)/15.0)*(float(31.0-d2r)/31.0)); //End of D2R
+    float rrPos=(float(15-rr)/15.0); //end of RR
 
-    arPos/=MAX(1.0,rrPos);
-    drPos/=MAX(1.0,rrPos);
-    d2rPos/=MAX(1.0,rrPos);
-    rrPos/=MAX(1.0,rrPos);
+    //shrink all the x positions horizontally
+    arPos/=2.0;
+    drPos/=2.0;
+    d2rPos/=2.0;
+    rrPos/=1.0;
 
-    ImVec2 pos1=ImLerp(rect.Min,rect.Max,ImVec2(0.0,1.0));
-    ImVec2 pos2=ImLerp(rect.Min,rect.Max,ImVec2(arPos,0.0));
-    ImVec2 pos3=ImLerp(rect.Min,rect.Max,ImVec2(drPos,(float)(sl)/30.0));
-    ImVec2 pos4=ImLerp(rect.Min,rect.Max,ImVec2(d2rPos,(float)(sl)/20.0));
-    ImVec2 pos5=ImLerp(rect.Min,rect.Max,ImVec2(rrPos,1.0));
-    dl->AddLine(pos1,pos2,color);
-    dl->AddLine(pos2,pos3,color);
-    dl->AddLine(pos3,pos4,color);
-    dl->AddLine(pos4,pos5,colorU);
+    ImVec2 pos1=ImLerp(rect.Min,rect.Max,ImVec2(0.0,1.0)); //the bottom corner
+    ImVec2 pos2=ImLerp(rect.Min,rect.Max,ImVec2(arPos,(tl/maxTl))); //peak of AR, start of DR
+    ImVec2 pos3=ImLerp(rect.Min,rect.Max,ImVec2(drPos,(float)((tl/maxTl)+(sl/15.0)-((tl/maxTl)*(sl/15.0))))); //end of DR, start of D2R
+    ImVec2 pos4=ImLerp(rect.Min,rect.Max,ImVec2(d2rPos,1.0)); //end of D2R
+    ImVec2 posRStart=ImLerp(rect.Min,rect.Max,ImVec2(0.0,(tl/maxTl))); //release start
+    ImVec2 posREnd=ImLerp(rect.Min,rect.Max,ImVec2(rrPos,1.0));//release end
+    ImVec2 posSLineHEnd=ImLerp(rect.Min,rect.Max,ImVec2(1.0,(float)((tl/maxTl)+(sl/15.0)-((tl/maxTl)*(sl/15.0))))); //sustain horizontal line end
+    ImVec2 posSLineVEnd=ImLerp(rect.Min,rect.Max,ImVec2(drPos,1.0)); //sustain vertical line end
+    ImVec2 posDecayRate0Pt=ImLerp(rect.Min,rect.Max,ImVec2(1.0,(tl/maxTl))); //Heght of the peak of AR, forever
+    ImVec2 posDecay2Rate0Pt=ImLerp(rect.Min,rect.Max,ImVec2(1.0,(float)((tl/maxTl)+(sl/15.0)-((tl/maxTl)*(sl/15.0))))); //Heght of the peak of SR, forever
+
+    //dl->Flags=ImDrawListFlags_AntiAliasedLines|ImDrawListFlags_AntiAliasedLinesUseTex;
+    if (ar==0.0) { //if AR = 0, the envelope never starts
+      dl->AddTriangleFilled(posRStart,posREnd,pos1,colorS); //draw release as shaded triangle behind everything
+      addAALine(dl,pos1,pos4,color); //draw line on ground
+    } else if (dr==0.0 && sl!=0.0) { //if DR = 0 and SL is not 0, then the envelope stays at max volume forever
+      dl->AddTriangleFilled(posRStart,posREnd,pos1,colorS); //draw release as shaded triangle behind everything
+      //addAALine(dl,pos3,posSLineHEnd,colorS); //draw horiz line through sustain level
+      //addAALine(dl,pos3,posSLineVEnd,colorS); //draw vert. line through sustain level
+      addAALine(dl,pos1,pos2,color); //A
+      addAALine(dl,pos2,posDecayRate0Pt,color); //Line from A to end of graph
+    } else if (d2r==0.0) { //if D2R = 0, the envelope stays at the sustain level forever
+      dl->AddTriangleFilled(posRStart,posREnd,pos1,colorS); //draw release as shaded triangle behind everything
+      addAALine(dl,pos3,posSLineHEnd,colorS); //draw horiz line through sustain level
+      addAALine(dl,pos3,posSLineVEnd,colorS); //draw vert. line through sustain level
+      addAALine(dl,pos1,pos2,color); //A
+      addAALine(dl,pos2,pos3,color); //D
+      addAALine(dl,pos3,posDecay2Rate0Pt,color); //Line from D to end of graph
+    } else { //draw graph normally
+      dl->AddTriangleFilled(posRStart,posREnd,pos1,colorS); //draw release as shaded triangle behind everything
+      addAALine(dl,pos3,posSLineHEnd,colorS); //draw horiz line through sustain level
+      addAALine(dl,pos3,posSLineVEnd,colorS); //draw vert. line through sustain level
+      addAALine(dl,pos1,pos2,color); //A
+      addAALine(dl,pos2,pos3,color); //D
+      addAALine(dl,pos3,pos4,color); //D2
+    }
+    //dl->Flags^=ImDrawListFlags_AntiAliasedLines|ImDrawListFlags_AntiAliasedLinesUseTex;
   }
 }
 
@@ -475,7 +567,7 @@ void FurnaceGUI::drawFMEnv(unsigned char ar, unsigned char dr, unsigned char d2r
 
 #define PARAMETER modified=true; e->notifyInsChange(curIns);
 
-#define NORMAL_MACRO(macro,macroLen,macroLoop,macroRel,macroMin,macroHeight,macroName,displayName,displayHeight,displayLoop,bitfield,bfVal,drawSlider,sliderVal,sliderLow,macroDispMin,bitOff,macroMode,macroColor,mmlStr,macroAMin,macroAMax,hoverFunc) \
+#define NORMAL_MACRO(macro,macroLen,macroLoop,macroRel,macroMin,macroHeight,macroName,displayName,displayHeight,displayLoop,bitfield,bfVal,drawSlider,sliderVal,sliderLow,macroDispMin,bitOff,macroMode,macroColor,mmlStr,macroAMin,macroAMax,hoverFunc,blockMode) \
   ImGui::TableNextRow(); \
   ImGui::TableNextColumn(); \
   ImGui::Text("%s",displayName); \
@@ -512,7 +604,7 @@ void FurnaceGUI::drawFMEnv(unsigned char ar, unsigned char dr, unsigned char d2r
   if (bitfield) { \
     PlotBitfield("##IMacro_" macroName,asInt,totalFit,0,bfVal,macroHeight,ImVec2(availableWidth,(displayLoop)?(displayHeight*dpiScale):(32.0f*dpiScale))); \
   } else { \
-    PlotCustom("##IMacro_" macroName,asFloat,totalFit,macroDragScroll,NULL,macroDispMin+macroMin,macroHeight+macroDispMin,ImVec2(availableWidth,(displayLoop)?(displayHeight*dpiScale):(32.0f*dpiScale)),sizeof(float),macroColor,macroLen-macroDragScroll,hoverFunc); \
+    PlotCustom("##IMacro_" macroName,asFloat,totalFit,macroDragScroll,NULL,macroDispMin+macroMin,macroHeight+macroDispMin,ImVec2(availableWidth,(displayLoop)?(displayHeight*dpiScale):(32.0f*dpiScale)),sizeof(float),macroColor,macroLen-macroDragScroll,hoverFunc,blockMode); \
   } \
   if (displayLoop && ImGui::IsItemClicked(ImGuiMouseButton_Left)) { \
     macroDragStart=ImGui::GetItemRectMin(); \
@@ -691,119 +783,398 @@ void FurnaceGUI::drawInsEdit() {
     } else {
       DivInstrument* ins=e->song.ins[curIns];
       ImGui::InputText("Name",&ins->name);
-      if (ins->type<0 || ins->type>22) ins->type=DIV_INS_FM;
+      if (ins->type<0 || ins->type>23) ins->type=DIV_INS_FM;
       int insType=ins->type;
-      if (ImGui::Combo("Type",&insType,insTypes,23)) {
+      if (ImGui::Combo("Type",&insType,insTypes,24,24)) {
         ins->type=(DivInstrumentType)insType;
       }
 
       if (ImGui::BeginTabBar("insEditTab")) {
-        if (ins->type==DIV_INS_FM) {
+        if (ins->type==DIV_INS_FM || ins->type==DIV_INS_OPL || ins->type==DIV_INS_OPLL || ins->type==DIV_INS_OPZ) {
           char label[32];
           float asFloat[256];
           int asInt[256];
           float loopIndicator[256];
+          int opCount=4;
+          if (ins->type==DIV_INS_OPL || ins->type==DIV_INS_OPLL) opCount=2;
+
           if (ImGui::BeginTabItem("FM")) {
             if (ImGui::BeginTable("fmDetails",3,ImGuiTableFlags_SizingStretchSame)) {
               ImGui::TableSetupColumn("c0",ImGuiTableColumnFlags_WidthStretch,0.0);
               ImGui::TableSetupColumn("c1",ImGuiTableColumnFlags_WidthStretch,0.0);
               ImGui::TableSetupColumn("c2",ImGuiTableColumnFlags_WidthStretch,0.0);
               ImGui::TableNextRow();
-              ImGui::TableNextColumn();
-              P(ImGui::SliderScalar(FM_NAME(FM_FB),ImGuiDataType_U8,&ins->fm.fb,&_ZERO,&_SEVEN));
-              P(ImGui::SliderScalar(FM_NAME(FM_FMS),ImGuiDataType_U8,&ins->fm.fms,&_ZERO,&_SEVEN));
-              ImGui::TableNextColumn();
-              P(ImGui::SliderScalar(FM_NAME(FM_ALG),ImGuiDataType_U8,&ins->fm.alg,&_ZERO,&_SEVEN));
-              P(ImGui::SliderScalar(FM_NAME(FM_AMS),ImGuiDataType_U8,&ins->fm.ams,&_ZERO,&_THREE));
-              ImGui::TableNextColumn();
-              drawAlgorithm(ins->fm.alg,FM_ALGS_4OP,ImVec2(ImGui::GetContentRegionAvail().x,48.0*dpiScale));
+              switch (ins->type) {
+                case DIV_INS_FM:
+                case DIV_INS_OPZ:
+                  ImGui::TableNextColumn();
+                  P(ImGui::SliderScalar(FM_NAME(FM_FB),ImGuiDataType_U8,&ins->fm.fb,&_ZERO,&_SEVEN)); rightClickable
+                  P(ImGui::SliderScalar(FM_NAME(FM_FMS),ImGuiDataType_U8,&ins->fm.fms,&_ZERO,&_SEVEN)); rightClickable
+                  ImGui::TableNextColumn();
+                  P(ImGui::SliderScalar(FM_NAME(FM_ALG),ImGuiDataType_U8,&ins->fm.alg,&_ZERO,&_SEVEN)); rightClickable
+                  P(ImGui::SliderScalar(FM_NAME(FM_AMS),ImGuiDataType_U8,&ins->fm.ams,&_ZERO,&_THREE)); rightClickable
+                  ImGui::TableNextColumn();
+                  drawAlgorithm(ins->fm.alg,FM_ALGS_4OP,ImVec2(ImGui::GetContentRegionAvail().x,48.0*dpiScale));
+                  break;
+                case DIV_INS_OPL:
+                case DIV_INS_OPLL: {
+                  bool dc=ins->fm.fms;
+                  bool dm=ins->fm.ams;
+                  bool sus=ins->fm.alg;
+                  ImGui::TableNextColumn();
+                  ImGui::BeginDisabled(ins->fm.opllPreset!=0);
+                  P(ImGui::SliderScalar(FM_NAME(FM_FB),ImGuiDataType_U8,&ins->fm.fb,&_ZERO,&_SEVEN)); rightClickable
+                  if (ImGui::Checkbox(FM_NAME(FM_DC),&dc)) { PARAMETER
+                    ins->fm.fms=dc;
+                  }
+                  ImGui::EndDisabled();
+                  ImGui::TableNextColumn();
+                  if (ImGui::Checkbox(FM_NAME(FM_SUS),&sus)) { PARAMETER
+                    ins->fm.alg=sus;
+                  }
+                  ImGui::BeginDisabled(ins->fm.opllPreset!=0);
+                  if (ImGui::Checkbox(FM_NAME(FM_DM),&dm)) { PARAMETER
+                    ins->fm.ams=dm;
+                  }
+                  ImGui::EndDisabled();
+                  ImGui::TableNextColumn();
+                  drawAlgorithm(0,FM_ALGS_2OP_OPL,ImVec2(ImGui::GetContentRegionAvail().x,24.0*dpiScale));
+                  ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+                  if (ImGui::BeginCombo("##LLPreset",opllInsNames[ins->fm.opllPreset])) {
+                    for (int i=0; i<17; i++) {
+                      if (ImGui::Selectable(opllInsNames[i])) {
+                        ins->fm.opllPreset=i;
+                      }
+                    }
+                    ImGui::EndCombo();
+                  }
+                  break;
+                }
+                default:
+                  break;
+              }
               ImGui::EndTable();
             }
-            if (ImGui::BeginTable("FMOperators",2,ImGuiTableFlags_SizingStretchSame)) {
-              for (int i=0; i<4; i++) {
-                DivInstrumentFM::Operator& op=ins->fm.op[opOrder[i]];
+
+            if (ins->type==DIV_INS_OPLL && ins->fm.opllPreset==16) {
+              P(ImGui::Checkbox("Fixed frequency mode",&ins->fm.fixedDrums));
+              if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("when enabled, drums will be set to the specified frequencies, ignoring the note.");
+              }
+              if (ins->fm.fixedDrums) {
+                int block=0;
+                int fNum=0;
+                if (ImGui::BeginTable("fixedDrumSettings",3)) {
+                  ImGui::TableNextRow(ImGuiTableRowFlags_Headers);
+                  ImGui::TableNextColumn();
+                  ImGui::Text("Drum");
+                  ImGui::TableNextColumn();
+                  ImGui::Text("Block");
+                  ImGui::TableNextColumn();
+                  ImGui::Text("FreqNum");
+
+                  ImGui::TableNextRow();
+                  ImGui::TableNextColumn();
+                  block=(ins->fm.kickFreq>>9)&7;
+                  fNum=ins->fm.kickFreq&511;
+                  ImGui::Text("Kick");
+                  ImGui::TableNextColumn();
+                  if (ImGui::InputInt("##DBlock0",&block,1,1)) {
+                    if (block<0) block=0;
+                    if (block>7) block=7;
+                    ins->fm.kickFreq=(block<<9)|fNum;
+                  }
+                  ImGui::TableNextColumn();
+                  if (ImGui::InputInt("##DFreq0",&fNum,1,1)) {
+                    if (fNum<0) fNum=0;
+                    if (fNum>511) fNum=511;
+                    ins->fm.kickFreq=(block<<9)|fNum;
+                  }
+
+                  ImGui::TableNextRow();
+                  ImGui::TableNextColumn();
+                  block=(ins->fm.snareHatFreq>>9)&7;
+                  fNum=ins->fm.snareHatFreq&511;
+                  ImGui::Text("Snare/Hi-hat");
+                  ImGui::TableNextColumn();
+                  if (ImGui::InputInt("##DBlock1",&block,1,1)) {
+                    if (block<0) block=0;
+                    if (block>7) block=7;
+                    ins->fm.snareHatFreq=(block<<9)|fNum;
+                  }
+                  ImGui::TableNextColumn();
+                  if (ImGui::InputInt("##DFreq1",&fNum,1,1)) {
+                    if (fNum<0) fNum=0;
+                    if (fNum>511) fNum=511;
+                    ins->fm.snareHatFreq=(block<<9)|fNum;
+                  }
+
+                  ImGui::TableNextRow();
+                  ImGui::TableNextColumn();
+                  block=(ins->fm.tomTopFreq>>9)&7;
+                  fNum=ins->fm.tomTopFreq&511;
+                  ImGui::Text("Tom/Top");
+                  ImGui::TableNextColumn();
+                  if (ImGui::InputInt("##DBlock2",&block,1,1)) {
+                    if (block<0) block=0;
+                    if (block>7) block=7;
+                    ins->fm.tomTopFreq=(block<<9)|fNum;
+                  }
+                  ImGui::TableNextColumn();
+                  if (ImGui::InputInt("##DFreq2",&fNum,1,1)) {
+                    if (fNum<0) fNum=0;
+                    if (fNum>511) fNum=511;
+                    ins->fm.tomTopFreq=(block<<9)|fNum;
+                  }
+                  ImGui::EndTable();
+                }
+              }
+            }
+
+            bool willDisplayOps=true;
+            if (ins->type==DIV_INS_OPLL && ins->fm.opllPreset!=0) willDisplayOps=false;
+            if (!willDisplayOps && ins->type==DIV_INS_OPLL) {
+              ins->fm.op[1].tl&=15;
+              P(ImGui::SliderScalar("Volume##TL",ImGuiDataType_U8,&ins->fm.op[1].tl,&_FIFTEEN,&_ZERO)); rightClickable
+            }
+            if (willDisplayOps) if (ImGui::BeginTable("FMOperators",2,ImGuiTableFlags_SizingStretchSame)) {
+              for (int i=0; i<opCount; i++) {
+                DivInstrumentFM::Operator& op=ins->fm.op[(opCount==4)?opOrder[i]:i];
                 if ((i+1)&1) ImGui::TableNextRow();
                 ImGui::TableNextColumn();
-
+                ImGui::Separator();
                 ImGui::PushID(fmt::sprintf("op%d",i).c_str());
                 ImGui::Dummy(ImVec2(dpiScale,dpiScale));
-                ImGui::Text("Operator %d",i+1);
-                drawFMEnv(op.ar,op.dr,op.d2r,op.rr,op.sl,ImVec2(ImGui::GetContentRegionAvail().x,96.0*dpiScale));
-                P(ImGui::SliderScalar(FM_NAME(FM_AR),ImGuiDataType_U8,&op.ar,&_ZERO,&_THIRTY_ONE));
-                P(ImGui::SliderScalar(FM_NAME(FM_DR),ImGuiDataType_U8,&op.dr,&_ZERO,&_THIRTY_ONE));
-                P(ImGui::SliderScalar(FM_NAME(FM_SL),ImGuiDataType_U8,&op.sl,&_ZERO,&_FIFTEEN));
-                P(ImGui::SliderScalar(FM_NAME(FM_D2R),ImGuiDataType_U8,&op.d2r,&_ZERO,&_THIRTY_ONE));
-                P(ImGui::SliderScalar(FM_NAME(FM_RR),ImGuiDataType_U8,&op.rr,&_ZERO,&_FIFTEEN));
-                P(ImGui::SliderScalar(FM_NAME(FM_TL),ImGuiDataType_U8,&op.tl,&_ZERO,&_ONE_HUNDRED_TWENTY_SEVEN));
+                ImGui::Text("OP%d",i+1);
 
-                ImGui::Separator();
-
-                P(ImGui::SliderScalar(FM_NAME(FM_RS),ImGuiDataType_U8,&op.rs,&_ZERO,&_THREE));
-                P(ImGui::SliderScalar(FM_NAME(FM_MULT),ImGuiDataType_U8,&op.mult,&_ZERO,&_FIFTEEN));
-                
-                int detune=(op.dt&7)-3;
-                if (ImGui::SliderInt(FM_NAME(FM_DT),&detune,-3,3)) { PARAMETER
-                  op.dt=detune+3;
-                }
-                P(ImGui::SliderScalar(FM_NAME(FM_DT2),ImGuiDataType_U8,&op.dt2,&_ZERO,&_THREE));
-                if (ImGui::IsItemHovered()) {
-                  ImGui::SetTooltip("Only for Arcade system");
-                }
-                bool ssgOn=op.ssgEnv&8;
-                unsigned char ssgEnv=op.ssgEnv&7;
-                if (ImGui::SliderScalar(FM_NAME(FM_SSG),ImGuiDataType_U8,&ssgEnv,&_ZERO,&_SEVEN,ssgEnvTypes[ssgEnv])) { PARAMETER
-                  op.ssgEnv=(op.ssgEnv&8)|(ssgEnv&7);
-                }
                 ImGui::SameLine();
-                if (ImGui::Checkbox("##SSGOn",&ssgOn)) { PARAMETER
-                  op.ssgEnv=(op.ssgEnv&7)|(ssgOn<<3);
-                }
-                if (ImGui::IsItemHovered()) {
-                  ImGui::SetTooltip("Only for Genesis and Neo Geo systems");
-                }
 
                 bool amOn=op.am;
                 if (ImGui::Checkbox(FM_NAME(FM_AM),&amOn)) { PARAMETER
                   op.am=amOn;
                 }
+
+                ImGui::SameLine();
+
+                int maxTl=127;
+                if (ins->type==DIV_INS_OPLL) {
+                  if (i==1) {
+                    maxTl=15;
+                  } else {
+                    maxTl=63;
+                  }
+                }
+                int maxArDr=(ins->type==DIV_INS_FM || ins->type==DIV_INS_OPZ)?31:15;
+
+                bool ssgOn=op.ssgEnv&8;
+                bool ksrOn=op.ksr;
+                bool vibOn=op.vib;
+                unsigned char ssgEnv=op.ssgEnv&7;
+                if (ImGui::Checkbox((ins->type==DIV_INS_OPL || ins->type==DIV_INS_OPLL)?FM_NAME(FM_EGS):"SSG On",&ssgOn)) { PARAMETER
+                  op.ssgEnv=(op.ssgEnv&7)|(ssgOn<<3);
+                }
+                if (ins->type==DIV_INS_FM) {
+                  if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip("Only for Genesis and Neo Geo systems");
+                  }
+                }
+
+                //52.0 controls vert scaling; default 96
+                drawFMEnv(op.tl&maxTl,op.ar&maxArDr,op.dr&maxArDr,(ins->type==DIV_INS_OPL || ins->type==DIV_INS_OPLL)?((op.rr&15)*2):op.d2r&31,op.rr&15,op.sl&15,maxTl,maxArDr,ImVec2(ImGui::GetContentRegionAvail().x,52.0*dpiScale));
+                //P(ImGui::SliderScalar(FM_NAME(FM_AR),ImGuiDataType_U8,&op.ar,&_ZERO,&_THIRTY_ONE)); rightClickable
+                if (ImGui::BeginTable("opParams",2,ImGuiTableFlags_SizingStretchProp)) {
+                  ImGui::TableSetupColumn("c0",ImGuiTableColumnFlags_WidthStretch,0.0); \
+                  ImGui::TableSetupColumn("c1",ImGuiTableColumnFlags_WidthFixed,0.0); \
+
+                  ImGui::TableNextRow();
+                  ImGui::TableNextColumn();
+                  ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+                  op.ar&=maxArDr;
+                  P(ImGui::SliderScalar("##AR",ImGuiDataType_U8,&op.ar,&maxArDr,&_ZERO)); rightClickable
+                  ImGui::TableNextColumn();
+                  ImGui::Text("%s",FM_NAME(FM_AR));
+
+                  ImGui::TableNextRow();
+                  ImGui::TableNextColumn();
+                  ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+                  op.dr&=maxArDr;
+                  P(ImGui::SliderScalar("##DR",ImGuiDataType_U8,&op.dr,&maxArDr,&_ZERO)); rightClickable
+                  ImGui::TableNextColumn();
+                  ImGui::Text("%s",FM_NAME(FM_DR));
+
+                  ImGui::TableNextRow();
+                  ImGui::TableNextColumn();
+                  ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+                  P(ImGui::SliderScalar("##SL",ImGuiDataType_U8,&op.sl,&_FIFTEEN,&_ZERO)); rightClickable
+                  ImGui::TableNextColumn();
+                  ImGui::Text("%s",FM_NAME(FM_SL));
+
+                  if (ins->type==DIV_INS_FM || ins->type==DIV_INS_OPZ) {
+                    ImGui::TableNextRow();
+                    ImGui::TableNextColumn();
+                    ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+                    P(ImGui::SliderScalar("##D2R",ImGuiDataType_U8,&op.d2r,&_THIRTY_ONE,&_ZERO)); rightClickable
+                    ImGui::TableNextColumn();
+                    ImGui::Text("%s",FM_NAME(FM_D2R));
+                  }
+
+                  ImGui::TableNextRow();
+                  ImGui::TableNextColumn();
+                  ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+                  P(ImGui::SliderScalar("##RR",ImGuiDataType_U8,&op.rr,&_FIFTEEN,&_ZERO)); rightClickable
+                  ImGui::TableNextColumn();
+                  ImGui::Text("%s",FM_NAME(FM_RR));
+
+                  ImGui::TableNextRow();
+                  ImGui::TableNextColumn();
+                  ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+                  op.tl&=maxTl;
+                  P(ImGui::SliderScalar("##TL",ImGuiDataType_U8,&op.tl,&maxTl,&_ZERO)); rightClickable
+                  ImGui::TableNextColumn();
+                  ImGui::Text("%s",FM_NAME(FM_TL));
+
+                  ImGui::TableNextRow();
+                  ImGui::TableNextColumn();
+                  ImGui::Separator();
+                  ImGui::TableNextColumn();
+                  ImGui::Separator();
+                  
+                  ImGui::TableNextRow();
+                  ImGui::TableNextColumn();
+                  ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+                  if (ins->type==DIV_INS_FM || ins->type==DIV_INS_OPZ) {
+                    P(ImGui::SliderScalar("##RS",ImGuiDataType_U8,&op.rs,&_ZERO,&_THREE)); rightClickable
+                    ImGui::TableNextColumn();
+                    ImGui::Text("%s",FM_NAME(FM_RS));
+                  } else {
+                    P(ImGui::SliderScalar("##KSL",ImGuiDataType_U8,&op.ksl,&_ZERO,&_THREE)); rightClickable
+                    ImGui::TableNextColumn();
+                    ImGui::Text("%s",FM_NAME(FM_KSL));
+                  }
+
+                  ImGui::TableNextRow();
+                  ImGui::TableNextColumn();
+                  ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+                  P(ImGui::SliderScalar(FM_NAME(FM_MULT),ImGuiDataType_U8,&op.mult,&_ZERO,&_FIFTEEN)); rightClickable
+                  ImGui::TableNextColumn();
+                  ImGui::Text("%s",FM_NAME(FM_MULT));
+                  
+                  if (ins->type==DIV_INS_FM || ins->type==DIV_INS_OPZ) {
+                    int detune=(op.dt&7)-3;
+                    ImGui::TableNextRow();
+                    ImGui::TableNextColumn();
+                    ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+                    if (ImGui::SliderInt("##DT",&detune,-3,3)) { PARAMETER
+                      op.dt=detune+3;
+                    } rightClickable
+                    ImGui::TableNextColumn();
+                    ImGui::Text("%s",FM_NAME(FM_DT));
+
+                    ImGui::TableNextRow();
+                    ImGui::TableNextColumn();
+                    ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+                    P(ImGui::SliderScalar("##DT2",ImGuiDataType_U8,&op.dt2,&_ZERO,&_THREE)); rightClickable
+                    if (ImGui::IsItemHovered()) {
+                      ImGui::SetTooltip("Only for Arcade system");
+                    }
+                    ImGui::TableNextColumn();
+                    ImGui::Text("%s",FM_NAME(FM_DT2));
+
+                    ImGui::TableNextRow();
+                    ImGui::TableNextColumn();
+                    ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+                    if (ImGui::SliderScalar("##SSG",ImGuiDataType_U8,&ssgEnv,&_ZERO,&_SEVEN,ssgEnvTypes[ssgEnv])) { PARAMETER
+                      op.ssgEnv=(op.ssgEnv&8)|(ssgEnv&7);
+                    } rightClickable
+                    ImGui::TableNextColumn();
+                    ImGui::Text("%s",FM_NAME(FM_SSG));
+                  }
+                  
+                  ImGui::EndTable();
+                }
+
+                if (ins->type==DIV_INS_OPLL || ins->type==DIV_INS_OPL) {
+                  if (ImGui::Checkbox(FM_NAME(FM_VIB),&vibOn)) { PARAMETER
+                    op.vib=vibOn;
+                  }
+                  ImGui::SameLine();
+                  if (ImGui::Checkbox(FM_NAME(FM_KSR),&ksrOn)) { PARAMETER
+                    op.ksr=ksrOn;
+                  }
+                }
+
                 ImGui::PopID();
               }
               ImGui::EndTable();
             }
             ImGui::EndTabItem();
           }
-          if (ImGui::BeginTabItem("Macros (FM)")) {
+          if (ImGui::BeginTabItem("FM Macros")) {
             MACRO_BEGIN(0);
-            NORMAL_MACRO(ins->std.algMacro,ins->std.algMacroLen,ins->std.algMacroLoop,ins->std.algMacroRel,0,7,"alg",FM_NAME(FM_ALG),96,ins->std.algMacroOpen,false,NULL,false,NULL,0,0,0,NULL,uiColors[GUI_COLOR_MACRO_OTHER],mmlString[0],0,7,NULL);
-            NORMAL_MACRO(ins->std.fbMacro,ins->std.fbMacroLen,ins->std.fbMacroLoop,ins->std.fbMacroRel,0,7,"fb",FM_NAME(FM_FB),96,ins->std.fbMacroOpen,false,NULL,false,NULL,0,0,0,NULL,uiColors[GUI_COLOR_MACRO_OTHER],mmlString[1],0,7,NULL);
-            NORMAL_MACRO(ins->std.fmsMacro,ins->std.fmsMacroLen,ins->std.fmsMacroLoop,ins->std.fmsMacroRel,0,7,"fms",FM_NAME(FM_FMS),96,ins->std.fmsMacroOpen,false,NULL,false,NULL,0,0,0,NULL,uiColors[GUI_COLOR_MACRO_OTHER],mmlString[2],0,7,NULL);
-            NORMAL_MACRO(ins->std.amsMacro,ins->std.amsMacroLen,ins->std.amsMacroLoop,ins->std.amsMacroRel,0,3,"ams",FM_NAME(FM_AMS),48,ins->std.amsMacroOpen,false,NULL,false,NULL,0,0,0,NULL,uiColors[GUI_COLOR_MACRO_OTHER],mmlString[3],0,3,NULL);
+            if (ins->type==DIV_INS_OPLL) {
+              NORMAL_MACRO(ins->std.algMacro,ins->std.algMacroLen,ins->std.algMacroLoop,ins->std.algMacroRel,0,1,"alg",FM_NAME(FM_SUS),32,ins->std.algMacroOpen,true,NULL,false,NULL,0,0,0,NULL,uiColors[GUI_COLOR_MACRO_OTHER],mmlString[0],0,1,NULL,false);
+              NORMAL_MACRO(ins->std.fbMacro,ins->std.fbMacroLen,ins->std.fbMacroLoop,ins->std.fbMacroRel,0,7,"fb",FM_NAME(FM_FB),96,ins->std.fbMacroOpen,false,NULL,false,NULL,0,0,0,NULL,uiColors[GUI_COLOR_MACRO_OTHER],mmlString[1],0,7,NULL,false);
+              NORMAL_MACRO(ins->std.fmsMacro,ins->std.fmsMacroLen,ins->std.fmsMacroLoop,ins->std.fmsMacroRel,0,1,"fms",FM_NAME(FM_DC),32,ins->std.fmsMacroOpen,true,NULL,false,NULL,0,0,0,NULL,uiColors[GUI_COLOR_MACRO_OTHER],mmlString[2],0,1,NULL,false);
+              NORMAL_MACRO(ins->std.amsMacro,ins->std.amsMacroLen,ins->std.amsMacroLoop,ins->std.amsMacroRel,0,1,"ams",FM_NAME(FM_DM),32,ins->std.amsMacroOpen,true,NULL,false,NULL,0,0,0,NULL,uiColors[GUI_COLOR_MACRO_OTHER],mmlString[3],0,1,NULL,false);
+            } else {
+              NORMAL_MACRO(ins->std.algMacro,ins->std.algMacroLen,ins->std.algMacroLoop,ins->std.algMacroRel,0,7,"alg",FM_NAME(FM_ALG),96,ins->std.algMacroOpen,false,NULL,false,NULL,0,0,0,NULL,uiColors[GUI_COLOR_MACRO_OTHER],mmlString[0],0,7,NULL,false);
+              NORMAL_MACRO(ins->std.fbMacro,ins->std.fbMacroLen,ins->std.fbMacroLoop,ins->std.fbMacroRel,0,7,"fb",FM_NAME(FM_FB),96,ins->std.fbMacroOpen,false,NULL,false,NULL,0,0,0,NULL,uiColors[GUI_COLOR_MACRO_OTHER],mmlString[1],0,7,NULL,false);
+              NORMAL_MACRO(ins->std.fmsMacro,ins->std.fmsMacroLen,ins->std.fmsMacroLoop,ins->std.fmsMacroRel,0,7,"fms",FM_NAME(FM_FMS),96,ins->std.fmsMacroOpen,false,NULL,false,NULL,0,0,0,NULL,uiColors[GUI_COLOR_MACRO_OTHER],mmlString[2],0,7,NULL,false);
+              NORMAL_MACRO(ins->std.amsMacro,ins->std.amsMacroLen,ins->std.amsMacroLoop,ins->std.amsMacroRel,0,3,"ams",FM_NAME(FM_AMS),48,ins->std.amsMacroOpen,false,NULL,false,NULL,0,0,0,NULL,uiColors[GUI_COLOR_MACRO_OTHER],mmlString[3],0,3,NULL,false);
+            }
             
-            NORMAL_MACRO(ins->std.ex1Macro,ins->std.ex1MacroLen,ins->std.ex1MacroLoop,ins->std.ex1MacroRel,0,127,"ex1","AM Depth",128,ins->std.ex1MacroOpen,false,NULL,false,NULL,0,0,0,NULL,uiColors[GUI_COLOR_MACRO_OTHER],mmlString[4],0,127,NULL);
-            NORMAL_MACRO(ins->std.ex2Macro,ins->std.ex2MacroLen,ins->std.ex2MacroLoop,ins->std.ex2MacroRel,0,127,"ex2","PM Depth",128,ins->std.ex2MacroOpen,false,NULL,false,NULL,0,0,0,NULL,uiColors[GUI_COLOR_MACRO_OTHER],mmlString[5],0,127,NULL);
-            NORMAL_MACRO(ins->std.ex3Macro,ins->std.ex3MacroLen,ins->std.ex3MacroLoop,ins->std.ex3MacroRel,0,255,"ex3","LFO Speed",128,ins->std.ex3MacroOpen,false,NULL,false,NULL,0,0,0,NULL,uiColors[GUI_COLOR_MACRO_OTHER],mmlString[6],0,255,NULL);
-            NORMAL_MACRO(ins->std.waveMacro,ins->std.waveMacroLen,ins->std.waveMacroLoop,ins->std.waveMacroRel,0,3,"wave","LFO Shape",48,ins->std.waveMacroOpen,false,NULL,false,NULL,0,0,0,NULL,uiColors[GUI_COLOR_MACRO_WAVE],mmlString[7],0,3,&macroLFOWaves);
+            if (ins->type==DIV_INS_FM || ins->type==DIV_INS_OPZ) {
+              NORMAL_MACRO(ins->std.ex1Macro,ins->std.ex1MacroLen,ins->std.ex1MacroLoop,ins->std.ex1MacroRel,0,127,"ex1","AM Depth",128,ins->std.ex1MacroOpen,false,NULL,false,NULL,0,0,0,NULL,uiColors[GUI_COLOR_MACRO_OTHER],mmlString[4],0,127,NULL,false);
+              NORMAL_MACRO(ins->std.ex2Macro,ins->std.ex2MacroLen,ins->std.ex2MacroLoop,ins->std.ex2MacroRel,0,127,"ex2","PM Depth",128,ins->std.ex2MacroOpen,false,NULL,false,NULL,0,0,0,NULL,uiColors[GUI_COLOR_MACRO_OTHER],mmlString[5],0,127,NULL,false);
+              NORMAL_MACRO(ins->std.ex3Macro,ins->std.ex3MacroLen,ins->std.ex3MacroLoop,ins->std.ex3MacroRel,0,255,"ex3","LFO Speed",128,ins->std.ex3MacroOpen,false,NULL,false,NULL,0,0,0,NULL,uiColors[GUI_COLOR_MACRO_OTHER],mmlString[6],0,255,NULL,false);
+              NORMAL_MACRO(ins->std.waveMacro,ins->std.waveMacroLen,ins->std.waveMacroLoop,ins->std.waveMacroRel,0,3,"wave","LFO Shape",48,ins->std.waveMacroOpen,false,NULL,false,NULL,0,0,0,NULL,uiColors[GUI_COLOR_MACRO_WAVE],mmlString[7],0,3,&macroLFOWaves,false);
+            }
             MACRO_END;
             ImGui::EndTabItem();
           }
-          for (int i=0; i<4; i++) {
-            snprintf(label,31,"Macros (OP%d)",i+1);
+          for (int i=0; i<opCount; i++) {
+            snprintf(label,31,"OP%d Macros",i+1);
             if (ImGui::BeginTabItem(label)) {
               ImGui::PushID(i);
               MACRO_BEGIN(0);
-              int ordi=orderedOps[i];
-              OP_MACRO(ins->std.opMacros[ordi].tlMacro,ins->std.opMacros[ordi].tlMacroLen,ins->std.opMacros[ordi].tlMacroLoop,ins->std.opMacros[ordi].tlMacroRel,127,ordi,"tl",FM_NAME(FM_TL),128,ins->std.opMacros[ordi].tlMacroOpen,false,NULL,mmlString[0]);
-              OP_MACRO(ins->std.opMacros[ordi].arMacro,ins->std.opMacros[ordi].arMacroLen,ins->std.opMacros[ordi].arMacroLoop,ins->std.opMacros[ordi].arMacroRel,31,ordi,"ar",FM_NAME(FM_AR),64,ins->std.opMacros[ordi].arMacroOpen,false,NULL,mmlString[1]);
-              OP_MACRO(ins->std.opMacros[ordi].drMacro,ins->std.opMacros[ordi].drMacroLen,ins->std.opMacros[ordi].drMacroLoop,ins->std.opMacros[ordi].drMacroRel,31,ordi,"dr",FM_NAME(FM_DR),64,ins->std.opMacros[ordi].drMacroOpen,false,NULL,mmlString[2]);
-              OP_MACRO(ins->std.opMacros[ordi].d2rMacro,ins->std.opMacros[ordi].d2rMacroLen,ins->std.opMacros[ordi].d2rMacroLoop,ins->std.opMacros[ordi].d2rMacroRel,31,ordi,"d2r",FM_NAME(FM_D2R),64,ins->std.opMacros[ordi].d2rMacroOpen,false,NULL,mmlString[3]);
-              OP_MACRO(ins->std.opMacros[ordi].rrMacro,ins->std.opMacros[ordi].rrMacroLen,ins->std.opMacros[ordi].rrMacroLoop,ins->std.opMacros[ordi].rrMacroRel,15,ordi,"rr",FM_NAME(FM_RR),64,ins->std.opMacros[ordi].rrMacroOpen,false,NULL,mmlString[4]);
-              OP_MACRO(ins->std.opMacros[ordi].slMacro,ins->std.opMacros[ordi].slMacroLen,ins->std.opMacros[ordi].slMacroLoop,ins->std.opMacros[ordi].slMacroRel,15,ordi,"sl",FM_NAME(FM_SL),64,ins->std.opMacros[ordi].slMacroOpen,false,NULL,mmlString[5]);
-              OP_MACRO(ins->std.opMacros[ordi].rsMacro,ins->std.opMacros[ordi].rsMacroLen,ins->std.opMacros[ordi].rsMacroLoop,ins->std.opMacros[ordi].rsMacroRel,3,ordi,"rs",FM_NAME(FM_RS),32,ins->std.opMacros[ordi].rsMacroOpen,false,NULL,mmlString[6]);
-              OP_MACRO(ins->std.opMacros[ordi].multMacro,ins->std.opMacros[ordi].multMacroLen,ins->std.opMacros[ordi].multMacroLoop,ins->std.opMacros[ordi].multMacroRel,15,ordi,"mult",FM_NAME(FM_MULT),64,ins->std.opMacros[ordi].multMacroOpen,false,NULL,mmlString[7]);
-              OP_MACRO(ins->std.opMacros[ordi].dtMacro,ins->std.opMacros[ordi].dtMacroLen,ins->std.opMacros[ordi].dtMacroLoop,ins->std.opMacros[ordi].dtMacroRel,7,ordi,"dt",FM_NAME(FM_DT),64,ins->std.opMacros[ordi].dtMacroOpen,false,NULL,mmlString[8]);
-              OP_MACRO(ins->std.opMacros[ordi].dt2Macro,ins->std.opMacros[ordi].dt2MacroLen,ins->std.opMacros[ordi].dt2MacroLoop,ins->std.opMacros[ordi].dt2MacroRel,3,ordi,"dt2",FM_NAME(FM_DT2),32,ins->std.opMacros[ordi].dt2MacroOpen,false,NULL,mmlString[9]);
-              OP_MACRO(ins->std.opMacros[ordi].amMacro,ins->std.opMacros[ordi].amMacroLen,ins->std.opMacros[ordi].amMacroLoop,ins->std.opMacros[ordi].amMacroRel,1,ordi,"am",FM_NAME(FM_AM),32,ins->std.opMacros[ordi].amMacroOpen,true,NULL,mmlString[10]);
-              OP_MACRO(ins->std.opMacros[ordi].ssgMacro,ins->std.opMacros[ordi].ssgMacroLen,ins->std.opMacros[ordi].ssgMacroLoop,ins->std.opMacros[ordi].ssgMacroRel,4,ordi,"ssg",FM_NAME(FM_SSG),64,ins->std.opMacros[ordi].ssgMacroOpen,true,ssgEnvBits,mmlString[11]);
+              int ordi=(opCount==4)?orderedOps[i]:i;
+              int maxTl=127;
+              if (ins->type==DIV_INS_OPLL) {
+                if (i==1) {
+                  maxTl=15;
+                } else {
+                  maxTl=63;
+                }
+              }
+              int maxArDr=(ins->type==DIV_INS_FM || ins->type==DIV_INS_OPZ)?31:15;
+
+              if (ins->type==DIV_INS_OPLL) {
+                OP_MACRO(ins->std.opMacros[ordi].tlMacro,ins->std.opMacros[ordi].tlMacroLen,ins->std.opMacros[ordi].tlMacroLoop,ins->std.opMacros[ordi].tlMacroRel,maxTl,ordi,"tl",FM_NAME(FM_TL),128,ins->std.opMacros[ordi].tlMacroOpen,false,NULL,mmlString[0]);
+                OP_MACRO(ins->std.opMacros[ordi].arMacro,ins->std.opMacros[ordi].arMacroLen,ins->std.opMacros[ordi].arMacroLoop,ins->std.opMacros[ordi].arMacroRel,maxArDr,ordi,"ar",FM_NAME(FM_AR),64,ins->std.opMacros[ordi].arMacroOpen,false,NULL,mmlString[1]);
+                OP_MACRO(ins->std.opMacros[ordi].drMacro,ins->std.opMacros[ordi].drMacroLen,ins->std.opMacros[ordi].drMacroLoop,ins->std.opMacros[ordi].drMacroRel,maxArDr,ordi,"dr",FM_NAME(FM_DR),64,ins->std.opMacros[ordi].drMacroOpen,false,NULL,mmlString[2]);
+                OP_MACRO(ins->std.opMacros[ordi].slMacro,ins->std.opMacros[ordi].slMacroLen,ins->std.opMacros[ordi].slMacroLoop,ins->std.opMacros[ordi].slMacroRel,15,ordi,"sl",FM_NAME(FM_SL),64,ins->std.opMacros[ordi].slMacroOpen,false,NULL,mmlString[5]);
+                OP_MACRO(ins->std.opMacros[ordi].rrMacro,ins->std.opMacros[ordi].rrMacroLen,ins->std.opMacros[ordi].rrMacroLoop,ins->std.opMacros[ordi].rrMacroRel,15,ordi,"rr",FM_NAME(FM_RR),64,ins->std.opMacros[ordi].rrMacroOpen,false,NULL,mmlString[4]);
+                OP_MACRO(ins->std.opMacros[ordi].kslMacro,ins->std.opMacros[ordi].kslMacroLen,ins->std.opMacros[ordi].kslMacroLoop,ins->std.opMacros[ordi].kslMacroRel,3,ordi,"ksl",FM_NAME(FM_KSL),32,ins->std.opMacros[ordi].kslMacroOpen,false,NULL,mmlString[6]);
+                OP_MACRO(ins->std.opMacros[ordi].multMacro,ins->std.opMacros[ordi].multMacroLen,ins->std.opMacros[ordi].multMacroLoop,ins->std.opMacros[ordi].multMacroRel,15,ordi,"mult",FM_NAME(FM_MULT),64,ins->std.opMacros[ordi].multMacroOpen,false,NULL,mmlString[7]);
+                
+                OP_MACRO(ins->std.opMacros[ordi].amMacro,ins->std.opMacros[ordi].amMacroLen,ins->std.opMacros[ordi].amMacroLoop,ins->std.opMacros[ordi].amMacroRel,1,ordi,"am",FM_NAME(FM_AM),32,ins->std.opMacros[ordi].amMacroOpen,true,NULL,mmlString[8]);
+                OP_MACRO(ins->std.opMacros[ordi].vibMacro,ins->std.opMacros[ordi].vibMacroLen,ins->std.opMacros[ordi].vibMacroLoop,ins->std.opMacros[ordi].vibMacroRel,1,ordi,"vib",FM_NAME(FM_VIB),32,ins->std.opMacros[ordi].vibMacroOpen,true,NULL,mmlString[9]);
+                OP_MACRO(ins->std.opMacros[ordi].ksrMacro,ins->std.opMacros[ordi].ksrMacroLen,ins->std.opMacros[ordi].ksrMacroLoop,ins->std.opMacros[ordi].ksrMacroRel,1,ordi,"ksr",FM_NAME(FM_KSR),32,ins->std.opMacros[ordi].ksrMacroOpen,true,NULL,mmlString[10]);
+                OP_MACRO(ins->std.opMacros[ordi].egtMacro,ins->std.opMacros[ordi].egtMacroLen,ins->std.opMacros[ordi].egtMacroLoop,ins->std.opMacros[ordi].egtMacroRel,1,ordi,"egt",FM_NAME(FM_EGS),32,ins->std.opMacros[ordi].egtMacroOpen,true,NULL,mmlString[11]);
+              } else {
+                OP_MACRO(ins->std.opMacros[ordi].tlMacro,ins->std.opMacros[ordi].tlMacroLen,ins->std.opMacros[ordi].tlMacroLoop,ins->std.opMacros[ordi].tlMacroRel,maxTl,ordi,"tl",FM_NAME(FM_TL),128,ins->std.opMacros[ordi].tlMacroOpen,false,NULL,mmlString[0]);
+                OP_MACRO(ins->std.opMacros[ordi].arMacro,ins->std.opMacros[ordi].arMacroLen,ins->std.opMacros[ordi].arMacroLoop,ins->std.opMacros[ordi].arMacroRel,maxArDr,ordi,"ar",FM_NAME(FM_AR),64,ins->std.opMacros[ordi].arMacroOpen,false,NULL,mmlString[1]);
+                OP_MACRO(ins->std.opMacros[ordi].drMacro,ins->std.opMacros[ordi].drMacroLen,ins->std.opMacros[ordi].drMacroLoop,ins->std.opMacros[ordi].drMacroRel,maxArDr,ordi,"dr",FM_NAME(FM_DR),64,ins->std.opMacros[ordi].drMacroOpen,false,NULL,mmlString[2]);
+                OP_MACRO(ins->std.opMacros[ordi].d2rMacro,ins->std.opMacros[ordi].d2rMacroLen,ins->std.opMacros[ordi].d2rMacroLoop,ins->std.opMacros[ordi].d2rMacroRel,31,ordi,"d2r",FM_NAME(FM_D2R),64,ins->std.opMacros[ordi].d2rMacroOpen,false,NULL,mmlString[3]);
+                OP_MACRO(ins->std.opMacros[ordi].rrMacro,ins->std.opMacros[ordi].rrMacroLen,ins->std.opMacros[ordi].rrMacroLoop,ins->std.opMacros[ordi].rrMacroRel,15,ordi,"rr",FM_NAME(FM_RR),64,ins->std.opMacros[ordi].rrMacroOpen,false,NULL,mmlString[4]);
+                OP_MACRO(ins->std.opMacros[ordi].slMacro,ins->std.opMacros[ordi].slMacroLen,ins->std.opMacros[ordi].slMacroLoop,ins->std.opMacros[ordi].slMacroRel,15,ordi,"sl",FM_NAME(FM_SL),64,ins->std.opMacros[ordi].slMacroOpen,false,NULL,mmlString[5]);
+                OP_MACRO(ins->std.opMacros[ordi].rsMacro,ins->std.opMacros[ordi].rsMacroLen,ins->std.opMacros[ordi].rsMacroLoop,ins->std.opMacros[ordi].rsMacroRel,3,ordi,"rs",FM_NAME(FM_RS),32,ins->std.opMacros[ordi].rsMacroOpen,false,NULL,mmlString[6]);
+                OP_MACRO(ins->std.opMacros[ordi].multMacro,ins->std.opMacros[ordi].multMacroLen,ins->std.opMacros[ordi].multMacroLoop,ins->std.opMacros[ordi].multMacroRel,15,ordi,"mult",FM_NAME(FM_MULT),64,ins->std.opMacros[ordi].multMacroOpen,false,NULL,mmlString[7]);
+                OP_MACRO(ins->std.opMacros[ordi].dtMacro,ins->std.opMacros[ordi].dtMacroLen,ins->std.opMacros[ordi].dtMacroLoop,ins->std.opMacros[ordi].dtMacroRel,7,ordi,"dt",FM_NAME(FM_DT),64,ins->std.opMacros[ordi].dtMacroOpen,false,NULL,mmlString[8]);
+                OP_MACRO(ins->std.opMacros[ordi].dt2Macro,ins->std.opMacros[ordi].dt2MacroLen,ins->std.opMacros[ordi].dt2MacroLoop,ins->std.opMacros[ordi].dt2MacroRel,3,ordi,"dt2",FM_NAME(FM_DT2),32,ins->std.opMacros[ordi].dt2MacroOpen,false,NULL,mmlString[9]);
+                OP_MACRO(ins->std.opMacros[ordi].amMacro,ins->std.opMacros[ordi].amMacroLen,ins->std.opMacros[ordi].amMacroLoop,ins->std.opMacros[ordi].amMacroRel,1,ordi,"am",FM_NAME(FM_AM),32,ins->std.opMacros[ordi].amMacroOpen,true,NULL,mmlString[10]);
+                OP_MACRO(ins->std.opMacros[ordi].ssgMacro,ins->std.opMacros[ordi].ssgMacroLen,ins->std.opMacros[ordi].ssgMacroLoop,ins->std.opMacros[ordi].ssgMacroRel,4,ordi,"ssg",FM_NAME(FM_SSG),64,ins->std.opMacros[ordi].ssgMacroOpen,true,ssgEnvBits,mmlString[11]);
+              }
               MACRO_END;
               ImGui::PopID();
               ImGui::EndTabItem();
@@ -811,9 +1182,9 @@ void FurnaceGUI::drawInsEdit() {
           }
         }
         if (ins->type==DIV_INS_GB) if (ImGui::BeginTabItem("Game Boy")) {
-          P(ImGui::SliderScalar("Volume",ImGuiDataType_U8,&ins->gb.envVol,&_ZERO,&_FIFTEEN));
-          P(ImGui::SliderScalar("Envelope Length",ImGuiDataType_U8,&ins->gb.envLen,&_ZERO,&_SEVEN));
-          P(ImGui::SliderScalar("Sound Length",ImGuiDataType_U8,&ins->gb.soundLen,&_ZERO,&_SIXTY_FOUR,ins->gb.soundLen>63?"Infinity":"%d"));
+          P(ImGui::SliderScalar("Volume",ImGuiDataType_U8,&ins->gb.envVol,&_ZERO,&_FIFTEEN)); rightClickable
+          P(ImGui::SliderScalar("Envelope Length",ImGuiDataType_U8,&ins->gb.envLen,&_ZERO,&_SEVEN)); rightClickable
+          P(ImGui::SliderScalar("Sound Length",ImGuiDataType_U8,&ins->gb.soundLen,&_ZERO,&_SIXTY_FOUR,ins->gb.soundLen>63?"Infinity":"%d")); rightClickable
           ImGui::Text("Envelope Direction:");
 
           bool goesUp=ins->gb.envDir;
@@ -856,11 +1227,11 @@ void FurnaceGUI::drawInsEdit() {
           }
           ImGui::PopStyleColor();
 
-          P(ImGui::SliderScalar("Attack",ImGuiDataType_U8,&ins->c64.a,&_ZERO,&_FIFTEEN));
-          P(ImGui::SliderScalar("Decay",ImGuiDataType_U8,&ins->c64.d,&_ZERO,&_FIFTEEN));
-          P(ImGui::SliderScalar("Sustain",ImGuiDataType_U8,&ins->c64.s,&_ZERO,&_FIFTEEN));
-          P(ImGui::SliderScalar("Release",ImGuiDataType_U8,&ins->c64.r,&_ZERO,&_FIFTEEN));
-          P(ImGui::SliderScalar("Duty",ImGuiDataType_U16,&ins->c64.duty,&_ZERO,&_FOUR_THOUSAND_NINETY_FIVE));
+          P(ImGui::SliderScalar("Attack",ImGuiDataType_U8,&ins->c64.a,&_ZERO,&_FIFTEEN)); rightClickable
+          P(ImGui::SliderScalar("Decay",ImGuiDataType_U8,&ins->c64.d,&_ZERO,&_FIFTEEN)); rightClickable
+          P(ImGui::SliderScalar("Sustain",ImGuiDataType_U8,&ins->c64.s,&_ZERO,&_FIFTEEN)); rightClickable
+          P(ImGui::SliderScalar("Release",ImGuiDataType_U8,&ins->c64.r,&_ZERO,&_FIFTEEN)); rightClickable
+          P(ImGui::SliderScalar("Duty",ImGuiDataType_U16,&ins->c64.duty,&_ZERO,&_FOUR_THOUSAND_NINETY_FIVE)); rightClickable
 
           bool ringMod=ins->c64.ringMod;
           if (ImGui::Checkbox("Ring Modulation",&ringMod)) { PARAMETER
@@ -874,8 +1245,8 @@ void FurnaceGUI::drawInsEdit() {
           P(ImGui::Checkbox("Enable filter",&ins->c64.toFilter));
           P(ImGui::Checkbox("Initialize filter",&ins->c64.initFilter));
           
-          P(ImGui::SliderScalar("Cutoff",ImGuiDataType_U16,&ins->c64.cut,&_ZERO,&_TWO_THOUSAND_FORTY_SEVEN));
-          P(ImGui::SliderScalar("Resonance",ImGuiDataType_U8,&ins->c64.res,&_ZERO,&_FIFTEEN));
+          P(ImGui::SliderScalar("Cutoff",ImGuiDataType_U16,&ins->c64.cut,&_ZERO,&_TWO_THOUSAND_FORTY_SEVEN)); rightClickable
+          P(ImGui::SliderScalar("Resonance",ImGuiDataType_U8,&ins->c64.res,&_ZERO,&_FIFTEEN)); rightClickable
 
           ImGui::Text("Filter Mode");
           ImGui::SameLine();
@@ -949,7 +1320,7 @@ void FurnaceGUI::drawInsEdit() {
           if (ins->type==DIV_INS_AMIGA) {
             volMax=64;
           }
-          if (ins->type==DIV_INS_FM) {
+          if (ins->type==DIV_INS_FM || ins->type == DIV_INS_MIKEY) {
             volMax=127;
           }
           if (ins->type==DIV_INS_GB) {
@@ -974,10 +1345,20 @@ void FurnaceGUI::drawInsEdit() {
           if (ins->type==DIV_INS_AY || ins->type==DIV_INS_AY8930 || ins->type==DIV_INS_FM) {
             dutyLabel="Noise Freq";
           }
+          if (ins->type == DIV_INS_MIKEY) {
+            dutyLabel = "Duty/Int";
+            dutyMax = 10;
+          }
           if (ins->type==DIV_INS_AY8930) {
             dutyMax=255;
           }
-          if (ins->type==DIV_INS_TIA || ins->type==DIV_INS_PCE || ins->type==DIV_INS_AMIGA) {
+          if (ins->type==DIV_INS_TIA || ins->type==DIV_INS_AMIGA) {
+            dutyMax=0;
+          }
+          if (ins->type==DIV_INS_PCE) {
+            dutyMax=1;
+          }
+          if (ins->type==DIV_INS_OPLL || ins->type==DIV_INS_OPL) {
             dutyMax=0;
           }
           bool dutyIsRel=(ins->type==DIV_INS_C64 && !ins->c64.dutyIsAbs);
@@ -991,7 +1372,8 @@ void FurnaceGUI::drawInsEdit() {
           if (ins->type==DIV_INS_TIA) waveMax=15;
           if (ins->type==DIV_INS_C64) waveMax=4;
           if (ins->type==DIV_INS_SAA1099) waveMax=2;
-          if (ins->type==DIV_INS_FM) waveMax=0;
+          if (ins->type==DIV_INS_FM || ins->type==DIV_INS_OPLL || ins->type==DIV_INS_OPL || ins->type==DIV_INS_OPZ) waveMax=0;
+          if (ins->type==DIV_INS_MIKEY) waveMax=0;
 
           const char** waveNames=ayShapeBits;
           if (ins->type==DIV_INS_C64) waveNames=c64ShapeBits;
@@ -1008,42 +1390,47 @@ void FurnaceGUI::drawInsEdit() {
           if (settings.macroView==0) { // modern view
             MACRO_BEGIN(28*dpiScale);
             if (volMax>0) {
-              NORMAL_MACRO(ins->std.volMacro,ins->std.volMacroLen,ins->std.volMacroLoop,ins->std.volMacroRel,volMin,volMax,"vol",volumeLabel,160,ins->std.volMacroOpen,false,NULL,false,NULL,0,0,0,NULL,uiColors[GUI_COLOR_MACRO_VOLUME],mmlString[0],volMin,volMax,NULL);
+              NORMAL_MACRO(ins->std.volMacro,ins->std.volMacroLen,ins->std.volMacroLoop,ins->std.volMacroRel,volMin,volMax,"vol",volumeLabel,160,ins->std.volMacroOpen,false,NULL,false,NULL,0,0,0,NULL,uiColors[GUI_COLOR_MACRO_VOLUME],mmlString[0],volMin,volMax,NULL,false);
             }
-            NORMAL_MACRO(ins->std.arpMacro,ins->std.arpMacroLen,ins->std.arpMacroLoop,ins->std.arpMacroRel,arpMacroScroll,arpMacroScroll+24,"arp","Arpeggio",160,ins->std.arpMacroOpen,false,NULL,true,&arpMacroScroll,(arpMode?0:-80),0,0,&ins->std.arpMacroMode,uiColors[GUI_COLOR_MACRO_PITCH],mmlString[1],-92,94,(ins->std.arpMacroMode?(&macroHoverNote):NULL));
+            NORMAL_MACRO(ins->std.arpMacro,ins->std.arpMacroLen,ins->std.arpMacroLoop,ins->std.arpMacroRel,arpMacroScroll,arpMacroScroll+24,"arp","Arpeggio",160,ins->std.arpMacroOpen,false,NULL,true,&arpMacroScroll,(arpMode?-60:-80),0,0,&ins->std.arpMacroMode,uiColors[GUI_COLOR_MACRO_PITCH],mmlString[1],-92,94,(ins->std.arpMacroMode?(&macroHoverNote):NULL),true);
             if (dutyMax>0) {
-              NORMAL_MACRO(ins->std.dutyMacro,ins->std.dutyMacroLen,ins->std.dutyMacroLoop,ins->std.dutyMacroRel,0,dutyMax,"duty",dutyLabel,160,ins->std.dutyMacroOpen,false,NULL,false,NULL,0,0,0,NULL,uiColors[GUI_COLOR_MACRO_OTHER],mmlString[2],0,dutyMax,NULL);
+              if (ins->type==DIV_INS_MIKEY) {
+                NORMAL_MACRO(ins->std.dutyMacro,ins->std.dutyMacroLen,ins->std.dutyMacroLoop,ins->std.dutyMacroRel,0,dutyMax,"duty",dutyLabel,160,ins->std.dutyMacroOpen,true,mikeyFeedbackBits,false,NULL,0,0,0,NULL,uiColors[GUI_COLOR_MACRO_OTHER],mmlString[2],0,dutyMax,NULL,false);
+              }
+              else {
+                NORMAL_MACRO(ins->std.dutyMacro,ins->std.dutyMacroLen,ins->std.dutyMacroLoop,ins->std.dutyMacroRel,0,dutyMax,"duty",dutyLabel,160,ins->std.dutyMacroOpen,false,NULL,false,NULL,0,0,0,NULL,uiColors[GUI_COLOR_MACRO_OTHER],mmlString[2],0,dutyMax,NULL,false);
+              }            
             }
             if (waveMax>0) {
-              NORMAL_MACRO(ins->std.waveMacro,ins->std.waveMacroLen,ins->std.waveMacroLoop,ins->std.waveMacroRel,0,waveMax,"wave","Waveform",bitMode?64:160,ins->std.waveMacroOpen,bitMode,waveNames,false,NULL,0,0,((ins->type==DIV_INS_AY || ins->type==DIV_INS_AY8930)?1:0),NULL,uiColors[GUI_COLOR_MACRO_WAVE],mmlString[3],0,waveMax,NULL);
+              NORMAL_MACRO(ins->std.waveMacro,ins->std.waveMacroLen,ins->std.waveMacroLoop,ins->std.waveMacroRel,0,waveMax,"wave","Waveform",bitMode?64:160,ins->std.waveMacroOpen,bitMode,waveNames,false,NULL,0,0,((ins->type==DIV_INS_AY || ins->type==DIV_INS_AY8930)?1:0),NULL,uiColors[GUI_COLOR_MACRO_WAVE],mmlString[3],0,waveMax,NULL,false);
             }
             if (ex1Max>0) {
               if (ins->type==DIV_INS_C64) {
-                NORMAL_MACRO(ins->std.ex1Macro,ins->std.ex1MacroLen,ins->std.ex1MacroLoop,ins->std.ex1MacroRel,0,ex1Max,"ex1","Filter Mode",64,ins->std.ex1MacroOpen,true,filtModeBits,false,NULL,0,0,0,NULL,uiColors[GUI_COLOR_MACRO_OTHER],mmlString[4],0,ex1Max,NULL);
+                NORMAL_MACRO(ins->std.ex1Macro,ins->std.ex1MacroLen,ins->std.ex1MacroLoop,ins->std.ex1MacroRel,0,ex1Max,"ex1","Filter Mode",64,ins->std.ex1MacroOpen,true,filtModeBits,false,NULL,0,0,0,NULL,uiColors[GUI_COLOR_MACRO_OTHER],mmlString[4],0,ex1Max,NULL,false);
               } else if (ins->type==DIV_INS_SAA1099) {
-                NORMAL_MACRO(ins->std.ex1Macro,ins->std.ex1MacroLen,ins->std.ex1MacroLoop,ins->std.ex1MacroRel,0,ex1Max,"ex1","Envelope",160,ins->std.ex1MacroOpen,true,saaEnvBits,false,NULL,0,0,0,NULL,uiColors[GUI_COLOR_MACRO_OTHER],mmlString[4],0,ex1Max,NULL);
+                NORMAL_MACRO(ins->std.ex1Macro,ins->std.ex1MacroLen,ins->std.ex1MacroLoop,ins->std.ex1MacroRel,0,ex1Max,"ex1","Envelope",160,ins->std.ex1MacroOpen,true,saaEnvBits,false,NULL,0,0,0,NULL,uiColors[GUI_COLOR_MACRO_OTHER],mmlString[4],0,ex1Max,NULL,false);
               } else {
-                NORMAL_MACRO(ins->std.ex1Macro,ins->std.ex1MacroLen,ins->std.ex1MacroLoop,ins->std.ex1MacroRel,0,ex1Max,"ex1","Duty",160,ins->std.ex1MacroOpen,false,NULL,false,NULL,0,0,0,NULL,uiColors[GUI_COLOR_MACRO_OTHER],mmlString[4],0,ex1Max,NULL);
+                NORMAL_MACRO(ins->std.ex1Macro,ins->std.ex1MacroLen,ins->std.ex1MacroLoop,ins->std.ex1MacroRel,0,ex1Max,"ex1","Duty",160,ins->std.ex1MacroOpen,false,NULL,false,NULL,0,0,0,NULL,uiColors[GUI_COLOR_MACRO_OTHER],mmlString[4],0,ex1Max,NULL,false);
               }
             }
             if (ex2Max>0) {
               if (ins->type==DIV_INS_C64) {
-                NORMAL_MACRO(ins->std.ex2Macro,ins->std.ex2MacroLen,ins->std.ex2MacroLoop,ins->std.ex2MacroRel,0,ex2Max,"ex2","Resonance",64,ins->std.ex2MacroOpen,false,NULL,false,NULL,0,0,0,NULL,uiColors[GUI_COLOR_MACRO_OTHER],mmlString[5],0,ex2Max,NULL);
+                NORMAL_MACRO(ins->std.ex2Macro,ins->std.ex2MacroLen,ins->std.ex2MacroLoop,ins->std.ex2MacroRel,0,ex2Max,"ex2","Resonance",64,ins->std.ex2MacroOpen,false,NULL,false,NULL,0,0,0,NULL,uiColors[GUI_COLOR_MACRO_OTHER],mmlString[5],0,ex2Max,NULL,false);
               } else {
-                NORMAL_MACRO(ins->std.ex2Macro,ins->std.ex2MacroLen,ins->std.ex2MacroLoop,ins->std.ex2MacroRel,0,ex2Max,"ex2","Envelope",64,ins->std.ex2MacroOpen,true,ayEnvBits,false,NULL,0,0,0,NULL,uiColors[GUI_COLOR_MACRO_OTHER],mmlString[5],0,ex2Max,NULL);
+                NORMAL_MACRO(ins->std.ex2Macro,ins->std.ex2MacroLen,ins->std.ex2MacroLoop,ins->std.ex2MacroRel,0,ex2Max,"ex2","Envelope",64,ins->std.ex2MacroOpen,true,ayEnvBits,false,NULL,0,0,0,NULL,uiColors[GUI_COLOR_MACRO_OTHER],mmlString[5],0,ex2Max,NULL,false);
               }
             }
             if (ins->type==DIV_INS_C64) {
-              NORMAL_MACRO(ins->std.ex3Macro,ins->std.ex3MacroLen,ins->std.ex3MacroLoop,ins->std.ex3MacroRel,0,2,"ex3","Special",32,ins->std.ex3MacroOpen,true,c64SpecialBits,false,NULL,0,0,0,NULL,uiColors[GUI_COLOR_MACRO_OTHER],mmlString[6],0,2,NULL);
+              NORMAL_MACRO(ins->std.ex3Macro,ins->std.ex3MacroLen,ins->std.ex3MacroLoop,ins->std.ex3MacroRel,0,2,"ex3","Special",32,ins->std.ex3MacroOpen,true,c64SpecialBits,false,NULL,0,0,0,NULL,uiColors[GUI_COLOR_MACRO_OTHER],mmlString[6],0,2,NULL,false);
             }
             if (ins->type==DIV_INS_AY || ins->type==DIV_INS_AY8930) {
-              NORMAL_MACRO(ins->std.ex3Macro,ins->std.ex3MacroLen,ins->std.ex3MacroLoop,ins->std.ex3MacroRel,0,15,"ex3","AutoEnv Num",96,ins->std.ex3MacroOpen,false,NULL,false,NULL,0,0,0,NULL,uiColors[GUI_COLOR_MACRO_OTHER],mmlString[6],0,15,NULL);
-              NORMAL_MACRO(ins->std.algMacro,ins->std.algMacroLen,ins->std.algMacroLoop,ins->std.algMacroRel,0,15,"alg","AutoEnv Den",96,ins->std.algMacroOpen,false,NULL,false,NULL,0,0,0,NULL,uiColors[GUI_COLOR_MACRO_OTHER],mmlString[7],0,15,NULL);
+              NORMAL_MACRO(ins->std.ex3Macro,ins->std.ex3MacroLen,ins->std.ex3MacroLoop,ins->std.ex3MacroRel,0,15,"ex3","AutoEnv Num",96,ins->std.ex3MacroOpen,false,NULL,false,NULL,0,0,0,NULL,uiColors[GUI_COLOR_MACRO_OTHER],mmlString[6],0,15,NULL,false);
+              NORMAL_MACRO(ins->std.algMacro,ins->std.algMacroLen,ins->std.algMacroLoop,ins->std.algMacroRel,0,15,"alg","AutoEnv Den",96,ins->std.algMacroOpen,false,NULL,false,NULL,0,0,0,NULL,uiColors[GUI_COLOR_MACRO_OTHER],mmlString[7],0,15,NULL,false);
             }
             if (ins->type==DIV_INS_AY8930) {
               // oh my i am running out of macros
-              NORMAL_MACRO(ins->std.fbMacro,ins->std.fbMacroLen,ins->std.fbMacroLoop,ins->std.fbMacroRel,0,8,"fb","Noise AND Mask",96,ins->std.fbMacroOpen,true,NULL,false,NULL,0,0,0,NULL,uiColors[GUI_COLOR_MACRO_OTHER],mmlString[8],0,8,NULL);
-              NORMAL_MACRO(ins->std.fmsMacro,ins->std.fmsMacroLen,ins->std.fmsMacroLoop,ins->std.fmsMacroRel,0,8,"fms","Noise OR Mask",96,ins->std.fmsMacroOpen,true,NULL,false,NULL,0,0,0,NULL,uiColors[GUI_COLOR_MACRO_OTHER],mmlString[9],0,8,NULL);
+              NORMAL_MACRO(ins->std.fbMacro,ins->std.fbMacroLen,ins->std.fbMacroLoop,ins->std.fbMacroRel,0,8,"fb","Noise AND Mask",96,ins->std.fbMacroOpen,true,NULL,false,NULL,0,0,0,NULL,uiColors[GUI_COLOR_MACRO_OTHER],mmlString[8],0,8,NULL,false);
+              NORMAL_MACRO(ins->std.fmsMacro,ins->std.fmsMacroLen,ins->std.fmsMacroLoop,ins->std.fmsMacroRel,0,8,"fms","Noise OR Mask",96,ins->std.fmsMacroOpen,true,NULL,false,NULL,0,0,0,NULL,uiColors[GUI_COLOR_MACRO_OTHER],mmlString[9],0,8,NULL,false);
             }
 
             MACRO_END;
@@ -1418,7 +1805,7 @@ void FurnaceGUI::drawWaveEdit() {
         wavePreview[i]=wave->data[i];
       }
       if (wave->len>0) wavePreview[wave->len]=wave->data[wave->len-1];
-
+      ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x); //wavetable text input size found here
       if (ImGui::InputText("##MMLWave",&mmlStringW)) {
         decodeMMLStrW(mmlStringW,wave->data,wave->len,wave->max);
       }
@@ -1427,7 +1814,11 @@ void FurnaceGUI::drawWaveEdit() {
       }
 
       ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,ImVec2(0.0f,0.0f));
-      ImVec2 contentRegion=ImGui::GetContentRegionAvail();
+
+      ImVec2 contentRegion=ImGui::GetContentRegionAvail(); //wavetable graph size determined here
+      if (ImGui::GetContentRegionAvail().y > (ImGui::GetContentRegionAvail().x / 2.0f)) {
+        contentRegion=ImVec2(ImGui::GetContentRegionAvail().x,ImGui::GetContentRegionAvail().x / 2.0f);
+      }
       PlotNoLerp("##Waveform",wavePreview,wave->len+1,0,NULL,0,wave->max,contentRegion);
       if (ImGui::IsItemClicked(ImGuiMouseButton_Left)) {
         waveDragStart=ImGui::GetItemRectMin();

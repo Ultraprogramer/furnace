@@ -37,8 +37,8 @@
     warnings+=(String("\n")+x); \
   }
 
-#define DIV_VERSION "0.5.7pre4"
-#define DIV_ENGINE_VERSION 52
+#define DIV_VERSION "dev63"
+#define DIV_ENGINE_VERSION 63
 
 enum DivStatusView {
   DIV_STATUS_NOTHING=0,
@@ -223,8 +223,6 @@ class DivEngine {
 
   size_t totalProcessed;
 
-  private: int* jediTable;
-
   DivSystem systemFromFile(unsigned char val);
   unsigned char systemToFile(DivSystem val);
   int dispatchCmd(DivCommand c);
@@ -262,8 +260,9 @@ class DivEngine {
     void nextBuf(float** in, float** out, int inChans, int outChans, unsigned int size);
     DivInstrument* getIns(int index);
     DivWavetable* getWave(int index);
+    DivSample* getSample(int index);
     // start fresh
-    void createNew();
+    void createNew(const int* description);
     // load a file.
     bool load(unsigned char* f, size_t length);
     // save as .dmf.
@@ -364,6 +363,9 @@ class DivEngine {
 
     // get preferred instrument type
     DivInstrumentType getPreferInsType(int ch);
+
+    // get song system name
+    const char* getSongSystemName();
 
     // get sys name
     const char* getSystemName(DivSystem sys);
@@ -529,6 +531,9 @@ class DivEngine {
 
     // get dispatch channel state
     void* getDispatchChanState(int chan);
+    
+    // get register pool
+    unsigned char* getRegisterPool(int sys, int& size, int& depth);
 
     // enable command stream dumping
     void enableCommandStream(bool enable);
@@ -617,10 +622,16 @@ class DivEngine {
     // terminate the engine.
     bool quit();
 
-    unsigned char* adpcmMem;
-    size_t adpcmMemLen;
+    unsigned char* adpcmAMem;
+    size_t adpcmAMemLen;
     unsigned char* adpcmBMem;
     size_t adpcmBMemLen;
+    unsigned char* qsoundMem;
+    size_t qsoundMemLen;
+    unsigned char* qsoundAMem;
+    size_t qsoundAMemLen;
+    unsigned char* dpcmMem;
+    size_t dpcmMemLen;
 
     DivEngine():
       output(NULL),
@@ -672,12 +683,17 @@ class DivEngine {
       metroPos(0),
       metroAmp(0.0f),
       totalProcessed(0),
-      jediTable(NULL),
       oscBuf{NULL,NULL},
       oscSize(1),
-      adpcmMem(NULL),
-      adpcmMemLen(0),
+      adpcmAMem(NULL),
+      adpcmAMemLen(0),
       adpcmBMem(NULL),
-      adpcmBMemLen(0) {}
+      adpcmBMemLen(0),
+      qsoundMem(NULL),
+      qsoundMemLen(0),
+      qsoundAMem(NULL),
+      qsoundAMemLen(0),
+      dpcmMem(NULL),
+      dpcmMemLen(0) {}
 };
 #endif

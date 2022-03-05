@@ -23,8 +23,14 @@
 #include "imgui_impl_sdlrenderer.h"
 #include <SDL.h>
 #include <deque>
+#include <initializer_list>
 #include <map>
 #include <vector>
+
+#define rightClickable if (ImGui::IsItemClicked(ImGuiMouseButton_Right)) ImGui::SetKeyboardFocusHere(-1);
+
+#define handleUnimportant if (settings.insFocusesPattern && patternOpen) {nextWindow=GUI_WINDOW_PATTERN;}
+#define unimportant(x) if (x) {handleUnimportant}
 
 enum FurnaceGUIColors {
   GUI_COLOR_BACKGROUND=0,
@@ -66,6 +72,7 @@ enum FurnaceGUIColors {
   GUI_COLOR_INSTR_POKEY,
   GUI_COLOR_INSTR_BEEPER,
   GUI_COLOR_INSTR_SWAN,
+  GUI_COLOR_INSTR_MIKEY,
   GUI_COLOR_INSTR_UNKNOWN,
   GUI_COLOR_CHANNEL_FM,
   GUI_COLOR_CHANNEL_PULSE,
@@ -127,6 +134,7 @@ enum FurnaceGUIWindows {
   GUI_WINDOW_PIANO,
   GUI_WINDOW_NOTES,
   GUI_WINDOW_CHANNELS,
+  GUI_WINDOW_REGISTER_VIEW
 };
 
 enum FurnaceGUIFileDialogs {
@@ -153,6 +161,7 @@ enum FurnaceGUIWarnings {
   GUI_WARN_NEW,
   GUI_WARN_OPEN,
   GUI_WARN_OPEN_DROP,
+  GUI_WARN_RESET_LAYOUT,
   GUI_WARN_GENERIC
 };
 
@@ -209,6 +218,7 @@ enum FurnaceGUIActions {
   GUI_ACTION_WINDOW_PIANO,
   GUI_ACTION_WINDOW_NOTES,
   GUI_ACTION_WINDOW_CHANNELS,
+  GUI_ACTION_WINDOW_REGISTER_VIEW,
 
   GUI_ACTION_COLLAPSE_WINDOW,
   GUI_ACTION_CLOSE_WINDOW,
@@ -385,7 +395,7 @@ struct Particle {
   const char* type;
   ImVec2 pos, speed;
   float gravity, friction, life, lifeSpeed;
-  bool update();
+  bool update(float frameTime);
   Particle(ImU32* color, const char* ty, float x, float y, float sX, float sY, float g, float fr, float l, float lS):
     colors(color),
     type(ty),
@@ -397,6 +407,23 @@ struct Particle {
     lifeSpeed(lS) {}
 };
 
+struct FurnaceGUISysDef {
+  const char* name;
+  std::vector<int> definition;
+  FurnaceGUISysDef(const char* n, std::initializer_list<int> def):
+    name(n), definition(def) {
+  }
+};
+
+struct FurnaceGUISysCategory {
+  const char* name;
+  std::vector<FurnaceGUISysDef> systems;
+  FurnaceGUISysCategory(const char* n):
+    name(n) {}
+  FurnaceGUISysCategory():
+    name(NULL) {}
+};
+
 class FurnaceGUI {
   DivEngine* e;
 
@@ -404,10 +431,12 @@ class FurnaceGUI {
   SDL_Renderer* sdlRend;
 
   String workingDir, fileName, clipboard, warnString, errorString, lastError, curFileName, nextFile;
+  String workingDirSong, workingDirIns, workingDirWave, workingDirSample, workingDirAudioExport, workingDirVGMExport, workingDirFont;
   String mmlString[12];
   String mmlStringW;
 
   bool quit, warnQuit, willCommit, edit, modified, displayError, displayExporting, vgmExportLoop;
+  bool displayNew;
   bool willExport[32];
 
   FurnaceGUIFileDialogs curFileDialog;
@@ -467,6 +496,9 @@ class FurnaceGUI {
     int statusDisplay;
     float dpiScale;
     int viewPrevPattern;
+    int guiColorsBase;
+    int avoidRaisingPattern;
+    int insFocusesPattern;
     unsigned int maxUndoSteps;
     String mainFontPath;
     String patFontPath;
@@ -507,6 +539,9 @@ class FurnaceGUI {
       statusDisplay(0),
       dpiScale(0.0f),
       viewPrevPattern(1),
+      guiColorsBase(0),
+      avoidRaisingPattern(0),
+      insFocusesPattern(1),
       maxUndoSteps(100),
       mainFontPath(""),
       patFontPath(""),
@@ -516,11 +551,11 @@ class FurnaceGUI {
   char finalLayoutPath[4096];
 
   int curIns, curWave, curSample, curOctave, oldRow, oldOrder, oldOrder1, editStep, exportLoops, soloChan, soloTimeout, orderEditMode, orderCursor;
-  int loopOrder, loopRow, loopEnd, isClipping, extraChannelButtons, patNameTarget;
+  int loopOrder, loopRow, loopEnd, isClipping, extraChannelButtons, patNameTarget, newSongCategory;
   bool editControlsOpen, ordersOpen, insListOpen, songInfoOpen, patternOpen, insEditOpen;
   bool waveListOpen, waveEditOpen, sampleListOpen, sampleEditOpen, aboutOpen, settingsOpen;
   bool mixerOpen, debugOpen, oscOpen, volMeterOpen, statsOpen, compatFlagsOpen;
-  bool pianoOpen, notesOpen, channelsOpen;
+  bool pianoOpen, notesOpen, channelsOpen, regViewOpen;
   SelectionPoint selStart, selEnd, cursor;
   bool selecting, curNibble, orderNibble, followOrders, followPattern, changeAllOrders;
   bool collapseWindow, demandScrollX, fancyPattern, wantPatName;
@@ -528,6 +563,7 @@ class FurnaceGUI {
   float peak[2];
   float patChanX[DIV_MAX_CHANS+1];
   float patChanSlideY[DIV_MAX_CHANS+1];
+  const int* nextDesc;
 
   // bit 31: ctrl
   // bit 30: reserved for SDL scancode mask
@@ -558,6 +594,8 @@ class FurnaceGUI {
   std::vector<DivCommand> cmdStream;
   std::vector<Particle> particles;
 
+  std::vector<FurnaceGUISysCategory> sysCategories;
+
   bool wavePreviewOn;
   SDL_Scancode wavePreviewKey;
   int wavePreviewNote;
@@ -567,9 +605,9 @@ class FurnaceGUI {
   int samplePreviewNote;
 
   // SDL_Scancode,int
-  std::map<SDL_Scancode,int> noteKeys;
+  std::map<int,int> noteKeys;
   // SDL_Keycode,int
-  std::map<SDL_Keycode,int> valueKeys;
+  std::map<int,int> valueKeys;
 
   int arpMacroScroll;
 
@@ -620,9 +658,10 @@ class FurnaceGUI {
   std::deque<UndoStep> redoHist;
 
   float keyHit[DIV_MAX_CHANS];
+  int lastIns[DIV_MAX_CHANS];
 
   void drawAlgorithm(unsigned char alg, FurnaceGUIFMAlgs algType, const ImVec2& size);
-  void drawFMEnv(unsigned char ar, unsigned char dr, unsigned char d2r, unsigned char rr, unsigned char sl, const ImVec2& size);
+  void drawFMEnv(unsigned char tl, unsigned char ar, unsigned char dr, unsigned char d2r, unsigned char rr, unsigned char sl, float maxTl, float maxArDr, const ImVec2& size);
 
   void updateWindowTitle();
   void prepareLayout();
@@ -647,9 +686,11 @@ class FurnaceGUI {
   void drawPiano();
   void drawNotes();
   void drawChannels();
+  void drawRegView();
   void drawAbout();
   void drawSettings();
   void drawDebug();
+  void drawNewSong();
 
   void parseKeybinds();
   void promptKey(int which);

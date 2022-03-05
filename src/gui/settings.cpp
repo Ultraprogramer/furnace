@@ -22,13 +22,17 @@
 #include "util.h"
 #include "IconsFontAwesome4.h"
 #include "misc/cpp/imgui_stdlib.h"
+#include <SDL_scancode.h>
 #include <fmt/printf.h>
+#include <imgui.h>
 
 #ifdef __APPLE__
 #define FURKMOD_CMD FURKMOD_META
 #else
 #define FURKMOD_CMD FURKMOD_CTRL
 #endif
+
+#define DEFAULT_NOTE_KEYS "5:7;6:4;7:3;8:16;10:6;11:8;12:24;13:10;16:11;17:9;18:26;19:28;20:12;21:17;22:1;23:19;24:23;25:5;26:14;27:2;28:21;29:0;30:100;31:13;32:15;34:18;35:20;36:22;38:25;39:27;43:100;46:101;47:29;48:31;53:102;"
 
 const char* mainFonts[]={
   "IBM Plex Sans",
@@ -113,6 +117,15 @@ void FurnaceGUI::promptKey(int which) {
   actionKeys[which]=0;
 }
 
+struct MappedInput {
+  int scan;
+  int val;
+  MappedInput():
+    scan(SDL_SCANCODE_UNKNOWN), val(0) {}
+  MappedInput(int s, int v):
+    scan(s), val(v) {}
+};
+
 void FurnaceGUI::drawSettings() {
   if (nextWindow==GUI_WINDOW_SETTINGS) {
     settingsOpen=true;
@@ -147,6 +160,16 @@ void FurnaceGUI::drawSettings() {
         bool allowEditDockingB=settings.allowEditDocking;
         if (ImGui::Checkbox("Allow docking editors",&allowEditDockingB)) {
           settings.allowEditDocking=allowEditDockingB;
+        }
+
+        bool avoidRaisingPatternB=settings.avoidRaisingPattern;
+        if (ImGui::Checkbox("Don't raise pattern editor on click",&avoidRaisingPatternB)) {
+          settings.avoidRaisingPattern=avoidRaisingPatternB;
+        }
+
+        bool insFocusesPatternB=settings.insFocusesPattern;
+        if (ImGui::Checkbox("Focus pattern editor when selecting instrument",&insFocusesPatternB)) {
+          settings.insFocusesPattern=insFocusesPatternB;
         }
 
         bool restartOnFlagChangeB=settings.restartOnFlagChange;
@@ -279,7 +302,7 @@ void FurnaceGUI::drawSettings() {
           if (ImGui::SliderFloat("UI scaling factor",&settings.dpiScale,1.0f,3.0f,"%.2fx")) {
             if (settings.dpiScale<0.5f) settings.dpiScale=0.5f;
             if (settings.dpiScale>3.0f) settings.dpiScale=3.0f;
-          }
+          } rightClickable
         }
         ImGui::Text("Main font");
         ImGui::SameLine();
@@ -370,7 +393,7 @@ void FurnaceGUI::drawSettings() {
         }
 
         bool macroViewB=settings.macroView;
-        if (ImGui::Checkbox("Classic macro view (standard macros only)",&macroViewB)) {
+        if (ImGui::Checkbox("Classic macro view (standard macros only; deprecated!)",&macroViewB)) {
           settings.macroView=macroViewB;
         }
 
@@ -412,6 +435,13 @@ void FurnaceGUI::drawSettings() {
 
         if (ImGui::TreeNode("Color scheme")) {
           if (ImGui::TreeNode("General")) {
+            ImGui::Text("Color scheme type:");
+            if (ImGui::RadioButton("Dark##gcb0",settings.guiColorsBase==0)) {
+              settings.guiColorsBase=0;
+            }
+            if (ImGui::RadioButton("Light##gcb1",settings.guiColorsBase==1)) {
+              settings.guiColorsBase=1;
+            }
             UI_COLOR_CONFIG(GUI_COLOR_BACKGROUND,"Background");
             UI_COLOR_CONFIG(GUI_COLOR_FRAME_BACKGROUND,"Window background");
             UI_COLOR_CONFIG(GUI_COLOR_MODAL_BACKDROP,"Modal backdrop");
@@ -461,6 +491,7 @@ void FurnaceGUI::drawSettings() {
             UI_COLOR_CONFIG(GUI_COLOR_INSTR_POKEY,"POKEY");
             UI_COLOR_CONFIG(GUI_COLOR_INSTR_BEEPER,"PC Beeper");
             UI_COLOR_CONFIG(GUI_COLOR_INSTR_SWAN,"WonderSwan");
+            UI_COLOR_CONFIG(GUI_COLOR_INSTR_MIKEY,"Lynx");
             UI_COLOR_CONFIG(GUI_COLOR_INSTR_UNKNOWN,"Other/Unknown");
             ImGui::TreePop();
           }
@@ -563,11 +594,95 @@ void FurnaceGUI::drawSettings() {
           UI_KEYBIND_CONFIG(GUI_ACTION_WINDOW_PIANO,"Piano");
           UI_KEYBIND_CONFIG(GUI_ACTION_WINDOW_NOTES,"Song Comments");
           UI_KEYBIND_CONFIG(GUI_ACTION_WINDOW_CHANNELS,"Channels");
+          UI_KEYBIND_CONFIG(GUI_ACTION_WINDOW_REGISTER_VIEW,"Register View");
 
           UI_KEYBIND_CONFIG(GUI_ACTION_COLLAPSE_WINDOW,"Collapse/expand current window");
           UI_KEYBIND_CONFIG(GUI_ACTION_CLOSE_WINDOW,"Close current window");
 
           KEYBIND_CONFIG_END;
+          ImGui::TreePop();
+        }
+        if (ImGui::TreeNode("Note input")) {
+          std::vector<MappedInput> sorted;
+          if (ImGui::BeginTable("keysNoteInput",4)) {
+            for (std::map<int,int>::value_type& i: noteKeys) {
+              std::vector<MappedInput>::iterator j;
+              for (j=sorted.begin(); j!=sorted.end(); j++) {
+                if (j->val>i.second) {
+                  break;
+                }
+              }
+              sorted.insert(j,MappedInput(i.first,i.second));
+            }
+
+            static char id[4096];
+
+            ImGui::TableNextRow(ImGuiTableRowFlags_Headers);
+            ImGui::TableNextColumn();
+            ImGui::Text("Key");
+            ImGui::TableNextColumn();
+            ImGui::Text("Type");
+            ImGui::TableNextColumn();
+            ImGui::Text("Value");
+            ImGui::TableNextColumn();
+            ImGui::Text("Remove");
+
+            for (MappedInput& i: sorted) {
+              ImGui::TableNextRow();
+              ImGui::TableNextColumn();
+              ImGui::Text("%s",SDL_GetScancodeName((SDL_Scancode)i.scan));
+              ImGui::TableNextColumn();
+              if (i.val==102) {
+                snprintf(id,4095,"Envelope release##SNType_%d",i.scan);
+                if (ImGui::Button(id)) {
+                  noteKeys[i.scan]=0;
+                }
+              } else if (i.val==101) {
+                snprintf(id,4095,"Note release##SNType_%d",i.scan);
+                if (ImGui::Button(id)) {
+                  noteKeys[i.scan]=102;
+                }
+              } else if (i.val==100) {
+                snprintf(id,4095,"Note off##SNType_%d",i.scan);
+                if (ImGui::Button(id)) {
+                  noteKeys[i.scan]=101;
+                }
+              } else {
+                snprintf(id,4095,"Note##SNType_%d",i.scan);
+                if (ImGui::Button(id)) {
+                  noteKeys[i.scan]=100;
+                }
+              }
+              ImGui::TableNextColumn();
+              if (i.val<100) {
+                snprintf(id,4095,"##SNValue_%d",i.scan);
+                if (ImGui::InputInt(id,&i.val,1,1)) {
+                  if (i.val<0) i.val=0;
+                  if (i.val>96) i.val=96;
+                  noteKeys[i.scan]=i.val;
+                }
+              }
+              ImGui::TableNextColumn();
+              snprintf(id,4095,ICON_FA_TIMES "##SNRemove_%d",i.scan);
+              if (ImGui::Button(id)) {
+                noteKeys.erase(i.scan);
+              }
+            }
+            ImGui::EndTable();
+
+            if (ImGui::BeginCombo("##SNAddNew","Add...")) {
+              for (int i=0; i<SDL_NUM_SCANCODES; i++) {
+                const char* sName=SDL_GetScancodeName((SDL_Scancode)i);
+                if (sName==NULL) continue;
+                if (sName[0]==0) continue;
+                snprintf(id,4095,"%s##SNNewKey_%d",sName,i);
+                if (ImGui::Selectable(id)) {
+                  noteKeys[(SDL_Scancode)i]=0;
+                }
+              }
+              ImGui::EndCombo();
+            }
+          }
           ImGui::TreePop();
         }
         if (ImGui::TreeNode("Pattern")) {
@@ -719,6 +834,14 @@ void FurnaceGUI::drawSettings() {
 #define LOAD_KEYBIND(x,y) \
   actionKeys[x]=e->getConfInt("keybind_" #x,y);
 
+#define clampSetting(x,minV,maxV) \
+  if (x<minV) { \
+    x=minV; \
+  } \
+  if (x>maxV) { \
+    x=maxV; \
+  }
+
 void FurnaceGUI::syncSettings() {
   settings.mainFontSize=e->getConfInt("mainFontSize",18);
   settings.patFontSize=e->getConfInt("patFontSize",18);
@@ -746,7 +869,6 @@ void FurnaceGUI::syncSettings() {
   settings.allowEditDocking=e->getConfInt("allowEditDocking",0);
   settings.chipNames=e->getConfInt("chipNames",0);
   settings.overflowHighlight=e->getConfInt("overflowHighlight",0);
-  if (settings.fmNames<0 || settings.fmNames>2) settings.fmNames=0;
   settings.partyTime=e->getConfInt("partyTime",0);
   settings.germanNotation=e->getConfInt("germanNotation",0);
   settings.stepOnDelete=e->getConfInt("stepOnDelete",0);
@@ -758,6 +880,46 @@ void FurnaceGUI::syncSettings() {
   settings.statusDisplay=e->getConfInt("statusDisplay",0);
   settings.dpiScale=e->getConfFloat("dpiScale",0.0f);
   settings.viewPrevPattern=e->getConfInt("viewPrevPattern",1);
+  settings.guiColorsBase=e->getConfInt("guiColorsBase",0);
+  settings.avoidRaisingPattern=e->getConfInt("avoidRaisingPattern",0);
+  settings.insFocusesPattern=e->getConfInt("insFocusesPattern",1);
+
+  clampSetting(settings.mainFontSize,2,96);
+  clampSetting(settings.patFontSize,2,96);
+  clampSetting(settings.iconSize,2,48);
+  clampSetting(settings.audioEngine,0,1);
+  clampSetting(settings.audioQuality,0,1);
+  clampSetting(settings.audioBufSize,32,4096);
+  clampSetting(settings.audioRate,8000,384000);
+  clampSetting(settings.arcadeCore,0,1);
+  clampSetting(settings.ym2612Core,0,1);
+  clampSetting(settings.saaCore,0,1);
+  clampSetting(settings.mainFont,0,6);
+  clampSetting(settings.patFont,0,6);
+  clampSetting(settings.patRowsBase,0,1);
+  clampSetting(settings.orderRowsBase,0,1);
+  clampSetting(settings.soloAction,0,2);
+  clampSetting(settings.pullDeleteBehavior,0,1);
+  clampSetting(settings.wrapHorizontal,0,2);
+  clampSetting(settings.wrapVertical,0,2);
+  clampSetting(settings.macroView,0,1);
+  clampSetting(settings.fmNames,0,2);
+  clampSetting(settings.allowEditDocking,0,1);
+  clampSetting(settings.chipNames,0,1);
+  clampSetting(settings.overflowHighlight,0,1);
+  clampSetting(settings.partyTime,0,1);
+  clampSetting(settings.germanNotation,0,1);
+  clampSetting(settings.stepOnDelete,0,1);
+  clampSetting(settings.scrollStep,0,1);
+  clampSetting(settings.sysSeparators,0,1);
+  clampSetting(settings.forceMono,0,1);
+  clampSetting(settings.controlLayout,0,3);
+  clampSetting(settings.statusDisplay,0,3);
+  clampSetting(settings.dpiScale,0.0f,4.0f);
+  clampSetting(settings.viewPrevPattern,0,1);
+  clampSetting(settings.guiColorsBase,0,1);
+  clampSetting(settings.avoidRaisingPattern,0,1);
+  clampSetting(settings.insFocusesPattern,0,1);
 
   // keybinds
   LOAD_KEYBIND(GUI_ACTION_OPEN,FURKMOD_CMD|SDLK_o);
@@ -805,6 +967,7 @@ void FurnaceGUI::syncSettings() {
   LOAD_KEYBIND(GUI_ACTION_WINDOW_PIANO,0);
   LOAD_KEYBIND(GUI_ACTION_WINDOW_NOTES,0);
   LOAD_KEYBIND(GUI_ACTION_WINDOW_CHANNELS,0);
+  LOAD_KEYBIND(GUI_ACTION_WINDOW_REGISTER_VIEW,0);
 
   LOAD_KEYBIND(GUI_ACTION_COLLAPSE_WINDOW,0);
   LOAD_KEYBIND(GUI_ACTION_CLOSE_WINDOW,FURKMOD_SHIFT|SDLK_ESCAPE);
@@ -906,6 +1069,8 @@ void FurnaceGUI::syncSettings() {
   LOAD_KEYBIND(GUI_ACTION_ORDERS_MOVE_DOWN,FURKMOD_SHIFT|SDLK_DOWN);
   LOAD_KEYBIND(GUI_ACTION_ORDERS_REPLAY,0);
 
+  decodeKeyMap(noteKeys,e->getConfString("noteKeys",DEFAULT_NOTE_KEYS));
+
   parseKeybinds();
 }
 
@@ -950,6 +1115,9 @@ void FurnaceGUI::commitSettings() {
   e->setConf("statusDisplay",settings.statusDisplay);
   e->setConf("dpiScale",settings.dpiScale);
   e->setConf("viewPrevPattern",settings.viewPrevPattern);
+  e->setConf("guiColorsBase",settings.guiColorsBase);
+  e->setConf("avoidRaisingPattern",settings.avoidRaisingPattern);
+  e->setConf("insFocusesPattern",settings.insFocusesPattern);
 
   PUT_UI_COLOR(GUI_COLOR_BACKGROUND);
   PUT_UI_COLOR(GUI_COLOR_FRAME_BACKGROUND);
@@ -990,6 +1158,7 @@ void FurnaceGUI::commitSettings() {
   PUT_UI_COLOR(GUI_COLOR_INSTR_POKEY);
   PUT_UI_COLOR(GUI_COLOR_INSTR_BEEPER);
   PUT_UI_COLOR(GUI_COLOR_INSTR_SWAN);
+  PUT_UI_COLOR(GUI_COLOR_INSTR_MIKEY);
   PUT_UI_COLOR(GUI_COLOR_INSTR_UNKNOWN);
   PUT_UI_COLOR(GUI_COLOR_CHANNEL_FM);
   PUT_UI_COLOR(GUI_COLOR_CHANNEL_PULSE);
@@ -1071,6 +1240,7 @@ void FurnaceGUI::commitSettings() {
   SAVE_KEYBIND(GUI_ACTION_WINDOW_PIANO);
   SAVE_KEYBIND(GUI_ACTION_WINDOW_NOTES);
   SAVE_KEYBIND(GUI_ACTION_WINDOW_CHANNELS);
+  SAVE_KEYBIND(GUI_ACTION_WINDOW_REGISTER_VIEW);
 
   SAVE_KEYBIND(GUI_ACTION_COLLAPSE_WINDOW);
   SAVE_KEYBIND(GUI_ACTION_CLOSE_WINDOW);
@@ -1171,6 +1341,8 @@ void FurnaceGUI::commitSettings() {
   SAVE_KEYBIND(GUI_ACTION_ORDERS_MOVE_UP);
   SAVE_KEYBIND(GUI_ACTION_ORDERS_MOVE_DOWN);
   SAVE_KEYBIND(GUI_ACTION_ORDERS_REPLAY);
+
+  e->setConf("noteKeys",encodeKeyMap(noteKeys));
 
   e->saveConf();
 

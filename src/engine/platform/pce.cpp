@@ -29,6 +29,7 @@
       curChan=c; \
       rWrite(0,curChan); \
     } \
+    regPool[16+((c)<<4)+((a)&0x0f)]=v; \
     rWrite(a,v); \
   }
 
@@ -80,21 +81,17 @@ void DivPlatformPCE::acquire(short* bufL, short* bufR, size_t start, size_t len)
       if (chan[i].pcm && chan[i].dacSample!=-1) {
         chan[i].dacPeriod+=chan[i].dacRate;
         if (chan[i].dacPeriod>rate) {
-          DivSample* s=parent->song.sample[chan[i].dacSample];
-          if (s->rendLength<=0) {
+          DivSample* s=parent->getSample(chan[i].dacSample);
+          if (s->samples<=0) {
             chan[i].dacSample=-1;
             continue;
           }
           chWrite(i,0x07,0);
-          if (s->depth==8) {
-            chWrite(i,0x04,0xdf);
-            chWrite(i,0x06,(((unsigned char)s->rendData[chan[i].dacPos++]+0x80)>>3));
-          } else {
-            chWrite(i,0x04,0xdf);
-            chWrite(i,0x06,(((unsigned short)s->rendData[chan[i].dacPos++]+0x8000)>>11));
-          }
-          if (chan[i].dacPos>=s->rendLength) {
-            if (s->loopStart>=0 && s->loopStart<=(int)s->rendLength) {
+          chWrite(i,0x04,0xdf);
+          chWrite(i,0x06,(((unsigned char)s->data8[chan[i].dacPos]+0x80)>>3));
+          chan[i].dacPos++;
+          if (chan[i].dacPos>=s->samples) {
+            if (s->loopStart>=0 && s->loopStart<=(int)s->samples) {
               chan[i].dacPos=s->loopStart;
             } else {
               chan[i].dacSample=-1;
@@ -110,6 +107,7 @@ void DivPlatformPCE::acquire(short* bufL, short* bufR, size_t start, size_t len)
     while (!writes.empty() && cycles<24) {
       QueuedWrite w=writes.front();
       pce->Write(cycles,w.addr,w.val);
+      regPool[w.addr&0x0f]=w.val;
       //cycles+=2;
       writes.pop();
     }
@@ -164,6 +162,13 @@ void DivPlatformPCE::tick() {
         chWrite(i,0x04,0x80|chan[i].outVol);
       }
     }
+    if (chan[i].std.hadDuty && i>=4) {
+      chan[i].noise=chan[i].std.duty;
+      chan[i].freqChanged=true;
+      int noiseSeek=chan[i].note;
+      if (noiseSeek<0) noiseSeek=0;
+      chWrite(i,0x07,chan[i].noise?(0x80|(parent->song.properNoiseLayout?(noiseSeek&31):noiseFreq[noiseSeek%12])):0);
+    }
     if (chan[i].std.hadArp) {
       if (!chan[i].inPorta) {
         if (chan[i].std.arpMode) {
@@ -202,7 +207,7 @@ void DivPlatformPCE::tick() {
       if (chan[i].furnaceDac) {
         double off=1.0;
         if (chan[i].dacSample>=0 && chan[i].dacSample<parent->song.sampleLen) {
-          DivSample* s=parent->song.sample[chan[i].dacSample];
+          DivSample* s=parent->getSample(chan[i].dacSample);
           if (s->centerRate<1) {
             off=1.0;
           } else {
@@ -213,7 +218,6 @@ void DivPlatformPCE::tick() {
         if (dumpWrites) addWrite(0xffff0001+(i<<8),chan[i].dacRate);
       }
       if (chan[i].freq>4095) chan[i].freq=4095;
-      if (chan[i].note>0x5d) chan[i].freq=0x01;
       chWrite(i,0x02,chan[i].freq&0xff);
       chWrite(i,0x03,chan[i].freq>>8);
       if (chan[i].keyOn) {
@@ -282,7 +286,7 @@ int DivPlatformPCE::dispatch(DivCommand c) {
           }
           chan[c.chan].dacPos=0;
           chan[c.chan].dacPeriod=0;
-          chan[c.chan].dacRate=parent->song.sample[chan[c.chan].dacSample]->rate;
+          chan[c.chan].dacRate=parent->getSample(chan[c.chan].dacSample)->rate;
           if (dumpWrites) {
             chWrite(c.chan,0x04,0xdf);
             addWrite(0xffff0001+(c.chan<<8),chan[c.chan].dacRate);
@@ -442,8 +446,17 @@ void* DivPlatformPCE::getChanState(int ch) {
   return &chan[ch];
 }
 
+unsigned char* DivPlatformPCE::getRegisterPool() {
+  return regPool;
+}
+
+int DivPlatformPCE::getRegisterPoolSize() {
+  return 112;
+}
+
 void DivPlatformPCE::reset() {
   while (!writes.empty()) writes.pop();
+  memset(regPool,0,128);
   for (int i=0; i<6; i++) {
     chan[i]=DivPlatformPCE::Channel();
   }

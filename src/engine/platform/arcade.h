@@ -42,17 +42,9 @@ class DivPlatformArcade: public DivDispatch {
       bool active, insChanged, freqChanged, keyOn, keyOff, inPorta, portaPause, furnacePCM;
       int vol, outVol;
       unsigned char chVolL, chVolR;
-
-      struct PCMChannel {
-        int sample;
-        unsigned int pos; // <<8
-        unsigned short len;
-        unsigned char freq;
-        PCMChannel(): sample(-1), pos(0), len(0), freq(0) {}
-      } pcm;
       Channel(): freqH(0), freqL(0), freq(0), baseFreq(0), pitch(0), note(0), ins(-1), active(false), insChanged(true), freqChanged(false), keyOn(false), keyOff(false), inPorta(false), portaPause(false), furnacePCM(false), vol(0), outVol(0), chVolL(127), chVolR(127) {}
     };
-    Channel chan[13];
+    Channel chan[8];
     struct QueuedWrite {
       unsigned short addr;
       unsigned char val;
@@ -63,7 +55,6 @@ class DivPlatformArcade: public DivDispatch {
     opm_t fm;
     int delay, baseFreqOff;
     int pcmL, pcmR, pcmCycles;
-    unsigned char sampleBank;
     unsigned char lastBusy;
     unsigned char amDepth, pmDepth;
 
@@ -71,9 +62,11 @@ class DivPlatformArcade: public DivDispatch {
     ymfm::ym2151::output_data out_ymfm;
     DivArcadeInterface iface;
 
+    unsigned char regPool[256];
+
     bool extMode, useYMFM;
 
-    bool isMuted[13];
+    bool isMuted[8];
   
     short oldWrites[256];
     short pendingWrites[256];
@@ -90,6 +83,8 @@ class DivPlatformArcade: public DivDispatch {
     void acquire(short* bufL, short* bufR, size_t start, size_t len);
     int dispatch(DivCommand c);
     void* getChanState(int chan);
+    unsigned char* getRegisterPool();
+    int getRegisterPoolSize();
     void reset();
     void forceIns();
     void tick();

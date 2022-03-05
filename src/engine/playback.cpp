@@ -18,6 +18,7 @@
  */
 
 #include "blip_buf.h"
+#include "song.h"
 #include "wavetable.h"
 #define _USE_MATH_DEFINES
 #include "dispatch.h"
@@ -108,6 +109,12 @@ const char* cmdName[DIV_CMD_MAX]={
   "AY_AUTO_ENVELOPE",
 
   "SAA_ENVELOPE",
+  
+  "LYNX_LFSR_LOAD",
+
+  "QSOUND_ECHO_FEEDBACK",
+  "QSOUND_ECHO_DELAY",
+  "QSOUND_ECHO_LEVEL",
 
   "ALWAYS_SET_VOLUME"
 };
@@ -141,9 +148,8 @@ int DivEngine::dispatchCmd(DivCommand c) {
 
 bool DivEngine::perSystemEffect(int ch, unsigned char effect, unsigned char effectVal) {
   switch (sysOfChan[ch]) {
-    case DIV_SYSTEM_GENESIS:
-    case DIV_SYSTEM_GENESIS_EXT:
     case DIV_SYSTEM_YM2612:
+    case DIV_SYSTEM_YM2612_EXT:
       switch (effect) {
         case 0x17: // DAC enable
           dispatchCmd(DivCommand(DIV_CMD_SAMPLE_MODE,ch,(effectVal>0)));
@@ -218,24 +224,54 @@ bool DivEngine::perSystemEffect(int ch, unsigned char effect, unsigned char effe
           return false;
       }
       break;
+    case DIV_SYSTEM_OPLL_DRUMS:
+      switch (effect) {
+        case 0x18: // drum mode toggle
+          dispatchCmd(DivCommand(DIV_CMD_FM_EXTCH,ch,effectVal));
+          break;
+        default:
+          return false;
+      }
+      break;
+    case DIV_SYSTEM_QSOUND:
+      switch (effect) {
+        case 0x10: // echo feedback
+          dispatchCmd(DivCommand(DIV_CMD_QSOUND_ECHO_FEEDBACK,ch,effectVal));
+          break;
+        case 0x11: // echo level
+          dispatchCmd(DivCommand(DIV_CMD_QSOUND_ECHO_LEVEL,ch,effectVal));
+          break;
+        default:
+          if ((effect&0xf0)==0x30) {
+            dispatchCmd(DivCommand(DIV_CMD_QSOUND_ECHO_DELAY,ch,((effect & 0x0f) << 8) | effectVal));
+          } else {
+            return false;
+          }
+          break;
+      }
+      break;
     default:
       return false;
   }
   return true;
 }
 
+#define IS_YM2610 (sysOfChan[ch]==DIV_SYSTEM_YM2610 || sysOfChan[ch]==DIV_SYSTEM_YM2610_EXT || sysOfChan[ch]==DIV_SYSTEM_YM2610_FULL || sysOfChan[ch]==DIV_SYSTEM_YM2610_FULL_EXT || sysOfChan[ch]==DIV_SYSTEM_YM2610B || sysOfChan[ch]==DIV_SYSTEM_YM2610B_EXT)
+
 bool DivEngine::perSystemPostEffect(int ch, unsigned char effect, unsigned char effectVal) {
   switch (sysOfChan[ch]) {
-    case DIV_SYSTEM_GENESIS:
-    case DIV_SYSTEM_GENESIS_EXT:
     case DIV_SYSTEM_YM2612:
-    case DIV_SYSTEM_ARCADE:
+    case DIV_SYSTEM_YM2612_EXT:
     case DIV_SYSTEM_YM2151:
     case DIV_SYSTEM_YM2610:
     case DIV_SYSTEM_YM2610_EXT:
+    case DIV_SYSTEM_YM2610_FULL:
+    case DIV_SYSTEM_YM2610_FULL_EXT:
+    case DIV_SYSTEM_YM2610B:
+    case DIV_SYSTEM_YM2610B_EXT:
       switch (effect) {
         case 0x10: // LFO or noise mode
-          if (sysOfChan[ch]==DIV_SYSTEM_ARCADE || sysOfChan[ch]==DIV_SYSTEM_YM2151) {
+          if (sysOfChan[ch]==DIV_SYSTEM_YM2151) {
             dispatchCmd(DivCommand(DIV_CMD_STD_NOISE_FREQ,ch,effectVal));
           } else {
             dispatchCmd(DivCommand(DIV_CMD_FM_LFO,ch,effectVal));
@@ -262,12 +298,12 @@ bool DivEngine::perSystemPostEffect(int ch, unsigned char effect, unsigned char 
           }
           break;
         case 0x17: // arcade LFO
-          if (sysOfChan[ch]==DIV_SYSTEM_ARCADE || sysOfChan[ch]==DIV_SYSTEM_YM2151) {
+          if (sysOfChan[ch]==DIV_SYSTEM_YM2151) {
             dispatchCmd(DivCommand(DIV_CMD_FM_LFO,ch,effectVal));
           }
           break;
         case 0x18: // EXT or LFO waveform
-          if (sysOfChan[ch]==DIV_SYSTEM_ARCADE || sysOfChan[ch]==DIV_SYSTEM_YM2151) {
+          if (sysOfChan[ch]==DIV_SYSTEM_YM2151) {
             dispatchCmd(DivCommand(DIV_CMD_FM_LFO_WAVE,ch,effectVal));
           } else {
             dispatchCmd(DivCommand(DIV_CMD_FM_EXTCH,ch,effectVal));
@@ -294,47 +330,76 @@ bool DivEngine::perSystemPostEffect(int ch, unsigned char effect, unsigned char 
         case 0x1f: // UNOFFICIAL: Arcade PM depth
           dispatchCmd(DivCommand(DIV_CMD_FM_PM_DEPTH,ch,effectVal&127));
           break;
-        case 0x20: // PCM frequency or Neo Geo PSG mode
-          if (sysOfChan[ch]==DIV_SYSTEM_ARCADE || sysOfChan[ch]==DIV_SYSTEM_YM2151) {
-            dispatchCmd(DivCommand(DIV_CMD_SAMPLE_FREQ,ch,effectVal));
-          } else if (sysOfChan[ch]==DIV_SYSTEM_YM2610 || sysOfChan[ch]==DIV_SYSTEM_YM2610_EXT) {
+        case 0x20: // Neo Geo PSG mode
+          if (IS_YM2610) {
             dispatchCmd(DivCommand(DIV_CMD_STD_NOISE_MODE,ch,effectVal));
           }
           break;
         case 0x21: // Neo Geo PSG noise freq
-          if (sysOfChan[ch]==DIV_SYSTEM_YM2610 || sysOfChan[ch]==DIV_SYSTEM_YM2610_EXT) {
+          if (IS_YM2610) {
             dispatchCmd(DivCommand(DIV_CMD_STD_NOISE_FREQ,ch,effectVal));
           }
           break;
         case 0x22: // UNOFFICIAL: Neo Geo PSG envelope enable
-          if (sysOfChan[ch]==DIV_SYSTEM_YM2610 || sysOfChan[ch]==DIV_SYSTEM_YM2610_EXT) {
+          if (IS_YM2610) {
             dispatchCmd(DivCommand(DIV_CMD_AY_ENVELOPE_SET,ch,effectVal));
           }
           break;
         case 0x23: // UNOFFICIAL: Neo Geo PSG envelope period low
-          if (sysOfChan[ch]==DIV_SYSTEM_YM2610 || sysOfChan[ch]==DIV_SYSTEM_YM2610_EXT) {
+          if (IS_YM2610) {
             dispatchCmd(DivCommand(DIV_CMD_AY_ENVELOPE_LOW,ch,effectVal));
           }
           break;
         case 0x24: // UNOFFICIAL: Neo Geo PSG envelope period high
-          if (sysOfChan[ch]==DIV_SYSTEM_YM2610 || sysOfChan[ch]==DIV_SYSTEM_YM2610_EXT) {
+          if (IS_YM2610) {
             dispatchCmd(DivCommand(DIV_CMD_AY_ENVELOPE_HIGH,ch,effectVal));
           }
           break;
         case 0x25: // UNOFFICIAL: Neo Geo PSG envelope slide up
-          if (sysOfChan[ch]==DIV_SYSTEM_YM2610 || sysOfChan[ch]==DIV_SYSTEM_YM2610_EXT) {
+          if (IS_YM2610) {
             dispatchCmd(DivCommand(DIV_CMD_AY_ENVELOPE_SLIDE,ch,-effectVal));
           }
           break;
         case 0x26: // UNOFFICIAL: Neo Geo PSG envelope slide down
-          if (sysOfChan[ch]==DIV_SYSTEM_YM2610 || sysOfChan[ch]==DIV_SYSTEM_YM2610_EXT) {
+          if (IS_YM2610) {
             dispatchCmd(DivCommand(DIV_CMD_AY_ENVELOPE_SLIDE,ch,effectVal));
           }
           break;
         case 0x29: // auto-envelope
-          if (sysOfChan[ch]==DIV_SYSTEM_YM2610 || sysOfChan[ch]==DIV_SYSTEM_YM2610_EXT) {
+          if (IS_YM2610) {
             dispatchCmd(DivCommand(DIV_CMD_AY_AUTO_ENVELOPE,ch,effectVal));
           }
+          break;
+        default:
+          return false;
+      }
+      break;
+    case DIV_SYSTEM_OPLL:
+    case DIV_SYSTEM_OPLL_DRUMS:
+    case DIV_SYSTEM_VRC7:
+      switch (effect) {
+        case 0x11: // FB
+          dispatchCmd(DivCommand(DIV_CMD_FM_FB,ch,effectVal&7));
+          break;
+        case 0x12: // TL op1
+          dispatchCmd(DivCommand(DIV_CMD_FM_TL,ch,0,effectVal&0x3f));
+          break;
+        case 0x13: // TL op2
+          dispatchCmd(DivCommand(DIV_CMD_FM_TL,ch,1,effectVal&0x0f));
+          break;
+        case 0x16: // MULT
+          if ((effectVal>>4)>0 && (effectVal>>4)<3) {
+            dispatchCmd(DivCommand(DIV_CMD_FM_MULT,ch,(effectVal>>4)-1,effectVal&15));
+          }
+          break;
+        case 0x19: // AR global
+          dispatchCmd(DivCommand(DIV_CMD_FM_AR,ch,-1,effectVal&31));
+          break;
+        case 0x1a: // AR op1
+          dispatchCmd(DivCommand(DIV_CMD_FM_AR,ch,0,effectVal&31));
+          break;
+        case 0x1b: // AR op2
+          dispatchCmd(DivCommand(DIV_CMD_FM_AR,ch,1,effectVal&31));
           break;
         default:
           return false;
@@ -422,6 +487,8 @@ bool DivEngine::perSystemPostEffect(int ch, unsigned char effect, unsigned char 
         case 0x29: // auto-envelope
           dispatchCmd(DivCommand(DIV_CMD_AY_AUTO_ENVELOPE,ch,effectVal));
           break;
+        default:
+          return false;
       }
       break;
     case DIV_SYSTEM_SAA1099:
@@ -435,6 +502,8 @@ bool DivEngine::perSystemPostEffect(int ch, unsigned char effect, unsigned char 
         case 0x12: // setup envelope
           dispatchCmd(DivCommand(DIV_CMD_SAA_ENVELOPE,ch,effectVal));
           break;
+        default:
+          return false;
       }
       break;
     case DIV_SYSTEM_TIA:
@@ -442,7 +511,27 @@ bool DivEngine::perSystemPostEffect(int ch, unsigned char effect, unsigned char 
         case 0x10: // select waveform
           dispatchCmd(DivCommand(DIV_CMD_WAVE,ch,effectVal));
           break;
+        default:
+          return false;
       }
+      break;
+    case DIV_SYSTEM_SEGAPCM:
+    case DIV_SYSTEM_SEGAPCM_COMPAT:
+      switch (effect) {
+        case 0x20: // PCM frequency
+          dispatchCmd(DivCommand(DIV_CMD_SAMPLE_FREQ,ch,effectVal));
+          break;
+        default:
+          return false;
+      }
+      break;
+    case DIV_SYSTEM_LYNX:
+      if (effect>=0x30 && effect<0x40) {
+        int value = ((int)(effect&0x0f)<<8)|effectVal;
+        dispatchCmd(DivCommand(DIV_CMD_LYNX_LFSR_LOAD,ch,value));
+        break;
+      }
+      return false;
       break;
     default:
       return false;
@@ -639,7 +728,7 @@ void DivEngine::processRow(int i, bool afterDelay) {
           }
           chan[i].portaStop=true;
           if (chan[i].keyOn) chan[i].doNote=false;
-          chan[i].stopOnOff=true;
+          chan[i].stopOnOff=song.stopPortaOnNoteOff; // what?!
           chan[i].scheduledSlideReset=false;
           dispatchCmd(DivCommand(DIV_CMD_PRE_PORTA,i,true,1));
           lastSlide=0x1337; // i hate this so much
@@ -689,7 +778,7 @@ void DivEngine::processRow(int i, bool afterDelay) {
         chan[i].portaSpeed=(effectVal>>4)*4;
         chan[i].portaStop=true;
         chan[i].nowYouCanStop=false;
-        chan[i].stopOnOff=true;
+        chan[i].stopOnOff=song.stopPortaOnNoteOff; // what?!
         chan[i].scheduledSlideReset=false;
         if ((effectVal&15)!=0) {
           chan[i].inPorta=true;
@@ -705,7 +794,7 @@ void DivEngine::processRow(int i, bool afterDelay) {
         chan[i].portaSpeed=(effectVal>>4)*4;
         chan[i].portaStop=true;
         chan[i].nowYouCanStop=false;
-        chan[i].stopOnOff=true;
+        chan[i].stopOnOff=song.stopPortaOnNoteOff; // what?!
         chan[i].scheduledSlideReset=false;
         if ((effectVal&15)!=0) {
           chan[i].inPorta=true;
@@ -724,7 +813,7 @@ void DivEngine::processRow(int i, bool afterDelay) {
         break;
       case 0xe5: // pitch
         chan[i].pitch=effectVal-0x80;
-        if (sysOfChan[i]==DIV_SYSTEM_ARCADE || sysOfChan[i]==DIV_SYSTEM_YM2151) { // YM2151 pitch oddity
+        if (sysOfChan[i]==DIV_SYSTEM_YM2151) { // YM2151 pitch oddity
           chan[i].pitch*=2;
           if (chan[i].pitch<-128) chan[i].pitch=-128;
           if (chan[i].pitch>127) chan[i].pitch=127;
@@ -765,7 +854,9 @@ void DivEngine::processRow(int i, bool afterDelay) {
   }
 
   if (chan[i].doNote) {
-    chan[i].vibratoPos=0;
+    if (!song.continuousVibrato) {
+      chan[i].vibratoPos=0;
+    }
     dispatchCmd(DivCommand(DIV_CMD_PITCH,i,chan[i].pitch+(((chan[i].vibratoDepth*vibTable[chan[i].vibratoPos]*chan[i].vibratoFine)>>4)/15)));
     if (chan[i].legato) {
       dispatchCmd(DivCommand(DIV_CMD_LEGATO,i,chan[i].note));
@@ -1089,24 +1180,23 @@ void DivEngine::nextBuf(float** in, float** out, int inChans, int outChans, unsi
       DivSample* s=song.sample[sPreview.sample];
 
       for (size_t i=0; i<prevtotal; i++) {
-        if (sPreview.pos>=s->rendLength) {
+        if (sPreview.pos>=s->samples) {
           samp_temp=0;
         } else {
-          samp_temp=s->rendData[sPreview.pos++];
+          samp_temp=s->data16[sPreview.pos++];
         }
-        if (s->depth==8) samp_temp<<=8;
         blip_add_delta(samp_bb,i,samp_temp-samp_prevSample);
         samp_prevSample=samp_temp;
 
-        if (sPreview.pos>=s->rendLength) {
-          if (s->loopStart>=0 && s->loopStart<(int)s->rendLength) {
+        if (sPreview.pos>=s->samples) {
+          if (s->loopStart>=0 && s->loopStart<(int)s->samples) {
             sPreview.pos=s->loopStart;
           }
         }
       }
 
-      if (sPreview.pos>=s->rendLength) {
-        if (s->loopStart>=0 && s->loopStart<(int)s->rendLength) {
+      if (sPreview.pos>=s->samples) {
+        if (s->loopStart>=0 && s->loopStart<(int)s->samples) {
           sPreview.pos=s->loopStart;
         } else {
           sPreview.sample=-1;
@@ -1251,17 +1341,17 @@ void DivEngine::nextBuf(float** in, float** out, int inChans, int outChans, unsi
   }
 
   for (int i=0; i<song.systemLen; i++) {
-    float volL=((float)song.systemVol[i]/64.0f)*((float)MIN(127,127-(int)song.systemPan[i])/127.0f);
-    float volR=((float)song.systemVol[i]/64.0f)*((float)MIN(127,127+(int)song.systemPan[i])/127.0f);
+    float volL=((float)song.systemVol[i]/64.0f)*((float)MIN(127,127-(int)song.systemPan[i])/127.0f)*song.masterVol;
+    float volR=((float)song.systemVol[i]/64.0f)*((float)MIN(127,127+(int)song.systemPan[i])/127.0f)*song.masterVol;
     if (disCont[i].dispatch->isStereo()) {
       for (size_t j=0; j<size; j++) {
-        out[0][j]+=((float)disCont[i].bbOut[0][j]/16384.0)*volL;
-        out[1][j]+=((float)disCont[i].bbOut[1][j]/16384.0)*volR;
+        out[0][j]+=((float)disCont[i].bbOut[0][j]/32768.0)*volL;
+        out[1][j]+=((float)disCont[i].bbOut[1][j]/32768.0)*volR;
       }
     } else {
       for (size_t j=0; j<size; j++) {
-        out[0][j]+=((float)disCont[i].bbOut[0][j]/16384.0)*volL;
-        out[1][j]+=((float)disCont[i].bbOut[0][j]/16384.0)*volR;
+        out[0][j]+=((float)disCont[i].bbOut[0][j]/32768.0)*volL;
+        out[1][j]+=((float)disCont[i].bbOut[0][j]/32768.0)*volR;
       }
     }
   }

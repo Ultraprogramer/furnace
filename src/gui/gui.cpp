@@ -58,13 +58,13 @@ extern "C" {
 #define LAYOUT_INI "/layout.ini"
 #endif
 
-bool Particle::update() {
-  pos.x+=speed.x;
-  pos.y+=speed.y;
-  speed.x*=friction;
-  speed.y*=friction;
-  speed.y+=gravity;
-  life-=lifeSpeed;
+bool Particle::update(float frameTime) {
+  pos.x+=speed.x*frameTime;
+  pos.y+=speed.y*frameTime;
+  speed.x*=1.0-((1.0-friction)*frameTime);
+  speed.y*=1.0-((1.0-friction)*frameTime);
+  speed.y+=gravity*frameTime;
+  life-=lifeSpeed*frameTime;
   return (life>0);
 }
 
@@ -154,7 +154,7 @@ bool FurnaceGUI::decodeNote(const char* what, short& note, short& octave) {
 String FurnaceGUI::encodeKeyMap(std::map<int,int>& map) {
   String ret;
   for (std::map<int,int>::value_type& i: map) {
-    ret+=fmt::printf("%d:%d;",i.first,i.second);
+    ret+=fmt::sprintf("%d:%d;",i.first,i.second);
   }
   return ret;
 }
@@ -422,12 +422,10 @@ void FurnaceGUI::setFileName(String name) {
 }
 
 void FurnaceGUI::updateWindowTitle() {
-  String type=getSystemName(e->song.system[0]);
-  if (e->song.systemLen>1) type="multi-system";
   if (e->song.name.empty()) {
-    SDL_SetWindowTitle(sdlWin,fmt::sprintf("Furnace (%s)",type).c_str());
+    SDL_SetWindowTitle(sdlWin,fmt::sprintf("Furnace (%s)",e->getSongSystemName()).c_str());
   } else {
-    SDL_SetWindowTitle(sdlWin,fmt::sprintf("%s - Furnace (%s)",e->song.name,type).c_str());
+    SDL_SetWindowTitle(sdlWin,fmt::sprintf("%s - Furnace (%s)",e->song.name,e->getSongSystemName()).c_str());
   }
 }
 
@@ -624,6 +622,10 @@ void FurnaceGUI::drawEditControls() {
             e->noteOff(activeNotes[i].chan);
           }
           activeNotes.clear();
+
+          if (settings.insFocusesPattern && !ImGui::IsItemActive() && patternOpen) {
+            nextWindow=GUI_WINDOW_PATTERN;
+          }
         }
 
         ImGui::Text("Edit Step");
@@ -631,6 +633,10 @@ void FurnaceGUI::drawEditControls() {
         if (ImGui::InputInt("##EditStep",&editStep,1,1)) {
           if (editStep>=e->song.patLen) editStep=e->song.patLen-1;
           if (editStep<0) editStep=0;
+
+          if (settings.insFocusesPattern && !ImGui::IsItemActive() && patternOpen) {
+            nextWindow=GUI_WINDOW_PATTERN;
+          }
         }
 
         if (ImGui::Button(ICON_FA_PLAY "##Play")) {
@@ -650,9 +656,9 @@ void FurnaceGUI::drawEditControls() {
 
         ImGui::Text("Follow");
         ImGui::SameLine();
-        ImGui::Checkbox("Orders",&followOrders);
+        unimportant(ImGui::Checkbox("Orders",&followOrders));
         ImGui::SameLine();
-        ImGui::Checkbox("Pattern",&followPattern);
+        unimportant(ImGui::Checkbox("Pattern",&followPattern));
 
         bool repeatPattern=e->getRepeatPattern();
         if (ImGui::Checkbox("Repeat pattern",&repeatPattern)) {
@@ -714,6 +720,10 @@ void FurnaceGUI::drawEditControls() {
             e->noteOff(activeNotes[i].chan);
           }
           activeNotes.clear();
+
+          if (settings.insFocusesPattern && !ImGui::IsItemActive() && patternOpen) {
+            nextWindow=GUI_WINDOW_PATTERN;
+          }
         }
 
         ImGui::SameLine();
@@ -723,14 +733,18 @@ void FurnaceGUI::drawEditControls() {
         if (ImGui::InputInt("##EditStep",&editStep,1,1)) {
           if (editStep>=e->song.patLen) editStep=e->song.patLen-1;
           if (editStep<0) editStep=0;
+
+          if (settings.insFocusesPattern && !ImGui::IsItemActive() && patternOpen) {
+            nextWindow=GUI_WINDOW_PATTERN;
+          }
         }
 
         ImGui::SameLine();
         ImGui::Text("Follow");
         ImGui::SameLine();
-        ImGui::Checkbox("Orders",&followOrders);
+        unimportant(ImGui::Checkbox("Orders",&followOrders));
         ImGui::SameLine();
-        ImGui::Checkbox("Pattern",&followPattern);
+        unimportant(ImGui::Checkbox("Pattern",&followPattern));
       }
       if (ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows)) curWindow=GUI_WINDOW_EDIT_CONTROLS;
       ImGui::End();
@@ -777,6 +791,10 @@ void FurnaceGUI::drawEditControls() {
             e->noteOff(activeNotes[i].chan);
           }
           activeNotes.clear();
+
+          if (settings.insFocusesPattern && !ImGui::IsItemActive() && patternOpen) {
+            nextWindow=GUI_WINDOW_PATTERN;
+          }
         }
 
         ImGui::Text("Step");
@@ -784,16 +802,20 @@ void FurnaceGUI::drawEditControls() {
         if (ImGui::InputInt("##EditStep",&editStep,0,0)) {
           if (editStep>=e->song.patLen) editStep=e->song.patLen-1;
           if (editStep<0) editStep=0;
+
+          if (settings.insFocusesPattern && !ImGui::IsItemActive() && patternOpen) {
+            nextWindow=GUI_WINDOW_PATTERN;
+          }
         }
 
         ImGui::Text("Foll.");
         ImGui::PushStyleColor(ImGuiCol_Button,ImVec4(0.2f,(followOrders)?0.6f:0.2f,0.2f,1.0f));
-        if (ImGui::SmallButton("Ord##FollowOrders")) {
+        if (ImGui::SmallButton("Ord##FollowOrders")) { handleUnimportant
           followOrders=!followOrders;
         }
         ImGui::PopStyleColor();
         ImGui::PushStyleColor(ImGuiCol_Button,ImVec4(0.2f,(followPattern)?0.6f:0.2f,0.2f,1.0f));
-        if (ImGui::SmallButton("Pat##FollowPattern")) {
+        if (ImGui::SmallButton("Pat##FollowPattern")) { handleUnimportant
           followPattern=!followPattern;
         }
         ImGui::PopStyleColor();
@@ -861,6 +883,10 @@ void FurnaceGUI::drawEditControls() {
             e->noteOff(activeNotes[i].chan);
           }
           activeNotes.clear();
+
+          if (settings.insFocusesPattern && !ImGui::IsItemActive() && patternOpen) {
+            nextWindow=GUI_WINDOW_PATTERN;
+          }
         }
 
         ImGui::Text("Step");
@@ -870,11 +896,15 @@ void FurnaceGUI::drawEditControls() {
         if (ImGui::InputInt("##EditStep",&editStep,1,1)) {
           if (editStep>=e->song.patLen) editStep=e->song.patLen-1;
           if (editStep<0) editStep=0;
+
+          if (settings.insFocusesPattern && !ImGui::IsItemActive() && patternOpen) {
+            nextWindow=GUI_WINDOW_PATTERN;
+          }
         }
         ImGui::NextColumn();
 
-        ImGui::Checkbox("Follow orders",&followOrders);
-        ImGui::Checkbox("Follow pattern",&followPattern);
+        unimportant(ImGui::Checkbox("Follow orders",&followOrders));
+        unimportant(ImGui::Checkbox("Follow pattern",&followPattern));
       }
       if (ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows)) curWindow=GUI_WINDOW_EDIT_CONTROLS;
       ImGui::End();
@@ -1156,6 +1186,10 @@ void FurnaceGUI::drawInsList() {
             ImGui::PushStyleColor(ImGuiCol_Text,uiColors[GUI_COLOR_INSTR_SWAN]);
             name=fmt::sprintf(ICON_FA_GAMEPAD " %.2X: %s##_INS%d\n",i,ins->name,i);
             break;
+          case DIV_INS_MIKEY:
+            ImGui::PushStyleColor(ImGuiCol_Text,uiColors[GUI_COLOR_INSTR_MIKEY]);
+            name=fmt::sprintf(ICON_FA_BAR_CHART " %.2X: %s##_INS%d\n",i,ins->name,i);
+            break;
           default:
             ImGui::PushStyleColor(ImGuiCol_Text,uiColors[GUI_COLOR_INSTR_UNKNOWN]);
             name=fmt::sprintf(ICON_FA_QUESTION " %.2X: %s##_INS%d\n",i,ins->name,i);
@@ -1166,10 +1200,15 @@ void FurnaceGUI::drawInsList() {
         if (ImGui::Selectable(name.c_str(),curIns==i)) {
           curIns=i;
         }
+        if (settings.insFocusesPattern && patternOpen && ImGui::IsItemActivated()) {
+          nextWindow=GUI_WINDOW_PATTERN;
+          curIns=i;
+        }
         ImGui::PopStyleColor();
         if (ImGui::IsItemHovered()) {
           if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
             insEditOpen=true;
+            nextWindow=GUI_WINDOW_INS_EDIT;
           }
         }
       }
@@ -1264,14 +1303,15 @@ void FurnaceGUI::drawSampleEdit() {
     } else {
       DivSample* sample=e->song.sample[curSample];
       ImGui::InputText("Name",&sample->name);
-      ImGui::Text("Length: %d",sample->length);
+      ImGui::Text("Length: %d",sample->samples);
+      ImGui::Text("Type: %d-bit",sample->depth);
       if (ImGui::InputInt("Rate (Hz)",&sample->rate,10,200)) {
         if (sample->rate<100) sample->rate=100;
-        if (sample->rate>32000) sample->rate=32000;
+        if (sample->rate>96000) sample->rate=96000;
       }
       if (ImGui::InputInt("Pitch of C-4 (Hz)",&sample->centerRate,10,200)) {
         if (sample->centerRate<100) sample->centerRate=100;
-        if (sample->centerRate>32000) sample->centerRate=32000;
+        if (sample->centerRate>65535) sample->centerRate=65535;
       }
       ImGui::Text("effective rate: %dHz",e->getEffectiveSampleRate(sample->rate));
       bool doLoop=(sample->loopStart>=0);
@@ -1285,18 +1325,10 @@ void FurnaceGUI::drawSampleEdit() {
       if (doLoop) {
         ImGui::SameLine();
         if (ImGui::InputInt("##LoopPosition",&sample->loopStart,1,10)) {
-          if (sample->loopStart<0 || sample->loopStart>=sample->length) {
+          if (sample->loopStart<0 || sample->loopStart>=(int)sample->samples) {
             sample->loopStart=0;
           }
         }
-      }
-      if (ImGui::SliderScalar("Volume",ImGuiDataType_S8,&sample->vol,&_ZERO,&_ONE_HUNDRED,fmt::sprintf("%d%%%%",sample->vol*2).c_str())) {
-        if (sample->vol<0) sample->vol=0;
-        if (sample->vol>100) sample->vol=100;
-      }
-      if (ImGui::SliderScalar("Pitch",ImGuiDataType_S8,&sample->pitch,&_ZERO,&_TEN,pitchLabel[sample->pitch])) {
-        if (sample->pitch<0) sample->pitch=0;
-        if (sample->pitch>10) sample->pitch=10;
       }
       if (ImGui::Button("Apply")) {
         e->renderSamplesP();
@@ -1314,20 +1346,27 @@ void FurnaceGUI::drawSampleEdit() {
       ImGui::Text("notes:");
       if (sample->loopStart>=0) {
         considerations=true;
-        ImGui::Text("- sample won't loop on Neo Geo ADPCM");
+        ImGui::Text("- sample won't loop on Neo Geo ADPCM-A");
         if (sample->loopStart&1) {
           ImGui::Text("- sample loop start will be aligned to the nearest even sample on Amiga");
         }
+        if (sample->loopStart>0) {
+          ImGui::Text("- sample loop start will be ignored on Neo Geo ADPCM-B");
+        }
       }
-      if (sample->length&1) {
+      if (sample->samples&1) {
         considerations=true;
         ImGui::Text("- sample length will be aligned to the nearest even sample on Amiga");
       }
-      if (sample->length>65535) {
+      if (sample->samples&511) {
         considerations=true;
-        ImGui::Text("- maximum sample length on Sega PCM is 65536 samples");
+        ImGui::Text("- sample length will be aligned and padded to 512 sample units on Neo Geo ADPCM.");
       }
-      if (sample->length>2097151) {
+      if (sample->samples>65535) {
+        considerations=true;
+        ImGui::Text("- maximum sample length on Sega PCM and QSound is 65536 samples");
+      }
+      if (sample->samples>2097151) {
         considerations=true;
         ImGui::Text("- maximum sample length on Neo Geo ADPCM is 2097152 samples");
       }
@@ -1350,19 +1389,27 @@ void FurnaceGUI::drawMixer() {
   ImGui::SetNextWindowSizeConstraints(ImVec2(400.0f*dpiScale,200.0f*dpiScale),ImVec2(scrW*dpiScale,scrH*dpiScale));
   if (ImGui::Begin("Mixer",&mixerOpen,settings.allowEditDocking?0:ImGuiWindowFlags_NoDocking)) {
     char id[32];
+    if (ImGui::SliderFloat("Master Volume",&e->song.masterVol,0,3,"%.2fx")) {
+      if (e->song.masterVol<0) e->song.masterVol=0;
+      if (e->song.masterVol>3) e->song.masterVol=3;
+    } rightClickable
     for (int i=0; i<e->song.systemLen; i++) {
       snprintf(id,31,"MixS%d",i);
       bool doInvert=e->song.systemVol[i]&128;
       signed char vol=e->song.systemVol[i]&127;
       ImGui::PushID(id);
       ImGui::Text("%d. %s",i+1,getSystemName(e->song.system[i]));
-      if (ImGui::SliderScalar("Volume",ImGuiDataType_S8,&vol,&_ZERO,&_ONE_HUNDRED_TWENTY_SEVEN)) {
-        e->song.systemVol[i]=(e->song.systemVol[i]&128)|vol;
-      }
-      ImGui::SliderScalar("Panning",ImGuiDataType_S8,&e->song.systemPan[i],&_MINUS_ONE_HUNDRED_TWENTY_SEVEN,&_ONE_HUNDRED_TWENTY_SEVEN);
+      ImGui::SameLine(ImGui::GetWindowWidth()-(82.0f*dpiScale));
       if (ImGui::Checkbox("Invert",&doInvert)) {
         e->song.systemVol[i]^=128;
       }
+      ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x-(50.0f*dpiScale));
+      if (ImGui::SliderScalar("Volume",ImGuiDataType_S8,&vol,&_ZERO,&_ONE_HUNDRED_TWENTY_SEVEN)) {
+        e->song.systemVol[i]=(e->song.systemVol[i]&128)|vol;
+      } rightClickable
+      ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x-(50.0f*dpiScale));
+      ImGui::SliderScalar("Panning",ImGuiDataType_S8,&e->song.systemPan[i],&_MINUS_ONE_HUNDRED_TWENTY_SEVEN,&_ONE_HUNDRED_TWENTY_SEVEN); rightClickable
+
       ImGui::PopID();
     }
   }
@@ -1379,7 +1426,6 @@ void FurnaceGUI::drawOsc() {
   if (!oscOpen) return;
   ImGui::SetNextWindowSizeConstraints(ImVec2(64.0f*dpiScale,32.0f*dpiScale),ImVec2(scrW*dpiScale,scrH*dpiScale));
   ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,ImVec2(0,0));
-  ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,ImVec2(0,0));
   ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,ImVec2(0,0));
   ImGui::PushStyleVar(ImGuiStyleVar_ItemInnerSpacing,ImVec2(0,0));
   if (ImGui::Begin("Oscilloscope",&oscOpen)) {
@@ -1393,7 +1439,7 @@ void FurnaceGUI::drawOsc() {
     ImGui::PlotLines("##SingleOsc",values,512,0,NULL,-1.0f,1.0f,ImGui::GetContentRegionAvail());
     ImGui::EndDisabled();
   }
-  ImGui::PopStyleVar(4);
+  ImGui::PopStyleVar(3);
   if (ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows)) curWindow=GUI_WINDOW_OSCILLOSCOPE;
   ImGui::End();
 }
@@ -1427,10 +1473,11 @@ void FurnaceGUI::drawVolMeter() {
     ImGuiStyle& style=ImGui::GetStyle();
     ImGui::ItemSize(ImVec2(4.0f,4.0f),style.FramePadding.y);
     ImU32 lowColor=ImGui::GetColorU32(uiColors[GUI_COLOR_VOLMETER_LOW]);
+    float peakDecay=0.05f*60.0f*ImGui::GetIO().DeltaTime;
     if (ImGui::ItemAdd(rect,ImGui::GetID("volMeter"))) {
       ImGui::RenderFrame(rect.Min,rect.Max,ImGui::GetColorU32(ImGuiCol_FrameBg),true,style.FrameRounding);
       for (int i=0; i<2; i++) {
-        peak[i]*=0.95;
+        peak[i]*=1.0-peakDecay;
         if (peak[i]<0.0001) peak[i]=0.0;
         for (int j=0; j<e->oscSize; j++) {
           if (fabs(e->oscBuf[i][j])>peak[i]) {
@@ -1487,7 +1534,7 @@ void FurnaceGUI::drawVolMeter() {
   ImGui::End();
 }
 
-const char* aboutLine[57]={
+const char* aboutLine[]={
   "tildearrow",
   "is proud to present",
   "",
@@ -1497,8 +1544,47 @@ const char* aboutLine[57]={
   "compatible with DefleMask modules.",
   "",
   "zero disassembly.",
-  "zero reverse-engineering.",
-  "only time and dedication.",
+  "just clean-room design,",
+  "time and dedication.",
+  "",
+  "> CREDITS <",
+  "",
+  "-- program --",
+  "tildearrow",
+  "cam900",
+  "laoo",
+  "superctr",
+  "",
+  "-- graphics/UI design --",
+  "tildearrow",
+  "BlastBrothers",
+  "",
+  "-- documentation --",
+  "tildearrow",
+  "freq-mod",
+  "nicco1690",
+  "DeMOSic",
+  "cam900",
+  "",
+  "-- demo songs --",
+  "0x5066",
+  "breakthetargets",
+  "CaptainMalware",
+  "kleeder",
+  "Mahbod Karamoozian",
+  "nicco1690",
+  "NikonTeen",
+  "SuperJet Spade",
+  "TheDuccinator",
+  "TheRealHedgehogSonic",
+  "tildearrow",
+  "Ultraprogramer",
+  "",
+  "-- additional feedback/fixes --",
+  "fd",
+  "OPNA2608",
+  "plane",
+  "TheEssem",
   "",
   "powered by:",
   "Dear ImGui by Omar Cornut",
@@ -1518,6 +1604,7 @@ const char* aboutLine[57]={
   "puNES by FHorse",
   "reSID by Dag Lem",
   "Stella by Stella Team",
+  "QSound emulator by Ian Karlsson and Valley Bell",
   "",
   "greetings to:",
   "Delek",
@@ -1525,7 +1612,8 @@ const char* aboutLine[57]={
   "ILLUMIDARO",
   "all members of Deflers of Noice!",
   "",
-  "copyright © 2021-2022 tildearrow.",
+  "copyright © 2021-2022 tildearrow",
+  "(and contributors).",
   "licensed under GPLv2+! see",
   "LICENSE for more information.",
   "",
@@ -1544,8 +1632,14 @@ const char* aboutLine[57]={
   "",
   "it also comes with ABSOLUTELY NO WARRANTY.",
   "",
-  "thanks to all contributors!"
+  "look out for Furnace 0.6 coming somewhere",
+  "before the equinox with more systems",
+  "and plenty of other things...",
+  "",
+  "thanks to all contributors/bug reporters!"
 };
+
+const size_t aboutCount = sizeof(aboutLine)/sizeof(aboutLine[0]);
 
 void FurnaceGUI::drawAbout() {
   // do stuff
@@ -1586,7 +1680,7 @@ void FurnaceGUI::drawAbout() {
 
     skip=false;
     skip2=false;
-    for (int i=(-fmod(160-(aboutSin*2),160))*2; i<scrW; i+=160) {
+    for (int i=(-160+fmod(aboutSin*2,160))*2; i<scrW; i+=160) {
       skip2=!skip2;
       skip=skip2;
       for (int j=(-240-cos(double(aboutSin*M_PI/300.0))*240.0)*2; j<scrH; j+=160) {
@@ -1596,7 +1690,7 @@ void FurnaceGUI::drawAbout() {
       }
     }
 
-    for (int i=0; i<56; i++) {
+    for (size_t i=0; i<aboutCount; i++) {
       double posX=(scrW*dpiScale/2.0)+(sin(double(i)*0.5+double(aboutScroll)/90.0)*120*dpiScale)-(ImGui::CalcTextSize(aboutLine[i]).x*0.5);
       double posY=(scrH-aboutScroll+42*i)*dpiScale;
       if (posY<-80*dpiScale || posY>scrH*dpiScale) continue;
@@ -1626,7 +1720,7 @@ void FurnaceGUI::drawAbout() {
 
     while (aboutHue>1) aboutHue--;
     while (aboutSin>=2400) aboutSin-=2400;
-    if (aboutScroll>(42*57+scrH)) aboutScroll=-20;
+    if (aboutScroll>(42*aboutCount+scrH)) aboutScroll=-20;
   }
   if (ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows)) curWindow=GUI_WINDOW_ABOUT;
   ImGui::End();
@@ -1853,6 +1947,74 @@ void FurnaceGUI::drawDebug() {
   ImGui::End();
 }
 
+void FurnaceGUI::drawNewSong() {
+  bool accepted=false;
+
+  ImGui::PushFont(bigFont);
+  ImGui::SetCursorPosX((ImGui::GetContentRegionAvail().x-ImGui::CalcTextSize("Choose a System!").x)*0.5);
+  ImGui::Text("Choose a System!");
+  ImGui::PopFont();
+
+  if (ImGui::BeginTable("sysPicker",2)) {
+    ImGui::TableSetupColumn("c0",ImGuiTableColumnFlags_WidthFixed,0.0f);
+    ImGui::TableSetupColumn("c1",ImGuiTableColumnFlags_WidthStretch,0.0f);
+
+    ImGui::TableNextRow(ImGuiTableRowFlags_Headers);
+    ImGui::TableNextColumn();
+    ImGui::Text("Categories");
+    ImGui::TableNextColumn();
+    ImGui::Text("Systems");
+
+    ImGui::TableNextRow();
+
+    // CATEGORIES
+    ImGui::TableNextColumn();
+    int index=0;
+    for (FurnaceGUISysCategory& i: sysCategories) {
+      if (ImGui::Selectable(i.name,newSongCategory==index,ImGuiSelectableFlags_DontClosePopups)) { \
+        newSongCategory=index;
+      }
+      index++;
+    }
+
+    // SYSTEMS
+    ImGui::TableNextColumn();
+    if (ImGui::BeginTable("Systems",1,ImGuiTableFlags_BordersInnerV|ImGuiTableFlags_ScrollY)) {
+      for (FurnaceGUISysDef& i: sysCategories[newSongCategory].systems) {
+        ImGui::TableNextRow();
+        ImGui::TableNextColumn();
+        if (ImGui::Selectable(i.name,false,ImGuiSelectableFlags_DontClosePopups)) {
+          nextDesc=i.definition.data();
+          accepted=true;
+        }
+      }
+      ImGui::EndTable();
+    }
+
+    ImGui::EndTable();
+  }
+
+  if (ImGui::Button("Cancel")) {
+    ImGui::CloseCurrentPopup();
+  }
+
+  if (accepted) {
+    e->createNew(nextDesc);
+    undoHist.clear();
+    redoHist.clear();
+    curFileName="";
+    modified=false;
+    curNibble=false;
+    orderNibble=false;
+    orderCursor=-1;
+    selStart=SelectionPoint();
+    selEnd=SelectionPoint();
+    cursor=SelectionPoint();
+    updateWindowTitle();
+    ImGui::CloseCurrentPopup();
+  }
+}
+
 void FurnaceGUI::drawStats() {
   if (nextWindow==GUI_WINDOW_STATS) {
     statsOpen=true;
@@ -1861,14 +2023,18 @@ void FurnaceGUI::drawStats() {
   }
   if (!statsOpen) return;
   if (ImGui::Begin("Statistics",&statsOpen)) {
-    String adpcmUsage=fmt::sprintf("%d/16384KB",e->adpcmMemLen/1024);
+    String adpcmAUsage=fmt::sprintf("%d/16384KB",e->adpcmAMemLen/1024);
     String adpcmBUsage=fmt::sprintf("%d/16384KB",e->adpcmBMemLen/1024);
+    String qsoundUsage=fmt::sprintf("%d/16384KB",e->qsoundMemLen/1024);
     ImGui::Text("ADPCM-A");
     ImGui::SameLine();
-    ImGui::ProgressBar(((float)e->adpcmMemLen)/16777216.0f,ImVec2(-FLT_MIN,0),adpcmUsage.c_str());
+    ImGui::ProgressBar(((float)e->adpcmAMemLen)/16777216.0f,ImVec2(-FLT_MIN,0),adpcmAUsage.c_str());
     ImGui::Text("ADPCM-B");
     ImGui::SameLine();
     ImGui::ProgressBar(((float)e->adpcmBMemLen)/16777216.0f,ImVec2(-FLT_MIN,0),adpcmBUsage.c_str());
+    ImGui::Text("QSound");
+    ImGui::SameLine();
+    ImGui::ProgressBar(((float)e->qsoundMemLen)/16777216.0f,ImVec2(-FLT_MIN,0),qsoundUsage.c_str());
   }
   if (ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows)) curWindow=GUI_WINDOW_STATS;
   ImGui::End();
@@ -1924,6 +2090,10 @@ void FurnaceGUI::drawCompatFlags() {
     if (ImGui::IsItemHovered()) {
       ImGui::SetTooltip("if this is on, only the first slide of a row in a channel will be considered.");
     }
+    ImGui::Checkbox("Continuous vibrato",&e->song.continuousVibrato);
+    if (ImGui::IsItemHovered()) {
+      ImGui::SetTooltip("when enabled, vibrato will not be reset on a new note.");
+    }
 
     ImGui::Text("Loop modality:");
     if (ImGui::RadioButton("Reset channels",e->song.loopModality==0)) {
@@ -1960,6 +2130,10 @@ void FurnaceGUI::drawCompatFlags() {
     ImGui::Checkbox("Broken shortcut slides (E1xy/E2xy)",&e->song.brokenShortcutSlides);
     if (ImGui::IsItemHovered()) {
       ImGui::SetTooltip("behavior changed in 0.5.7");
+    }
+    ImGui::Checkbox("Stop portamento on note off",&e->song.stopPortaOnNoteOff);
+    if (ImGui::IsItemHovered()) {
+      ImGui::SetTooltip("behavior changed in 0.6");
     }
   }
   if (ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows)) curWindow=GUI_WINDOW_COMPAT_FLAGS;
@@ -2036,6 +2210,57 @@ void FurnaceGUI::drawChannels() {
     }
   }
   if (ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows)) curWindow=GUI_WINDOW_CHANNELS;
+  ImGui::End();
+}
+
+void FurnaceGUI::drawRegView() {
+  if (nextWindow==GUI_WINDOW_REGISTER_VIEW) {
+    channelsOpen=true;
+    ImGui::SetNextWindowFocus();
+    nextWindow=GUI_WINDOW_NOTHING;
+  }
+  if (!regViewOpen) return;
+  if (ImGui::Begin("Register View",&regViewOpen)) {
+    for (int i=0; i<e->song.systemLen; i++) {
+      ImGui::Text("%d. %s",i+1,getSystemName(e->song.system[i]));
+      int size=0;
+      int depth=8;
+      unsigned char* regPool=e->getRegisterPool(i,size,depth);
+      unsigned short* regPoolW=(unsigned short*)regPool;
+      if (regPool==NULL) {
+        ImGui::Text("- no register pool available");
+      } else {
+        ImGui::PushFont(patFont);
+        if (ImGui::BeginTable("Memory",17)) {
+          ImGui::TableNextRow();
+          ImGui::TableNextColumn();
+          for (int i=0; i<16; i++) {
+            ImGui::TableNextColumn();
+            ImGui::TextColored(uiColors[GUI_COLOR_PATTERN_ROW_INDEX]," %X",i);
+          }
+          for (int i=0; i<=((size-1)>>4); i++) {
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::TextColored(uiColors[GUI_COLOR_PATTERN_ROW_INDEX],"%.2X",i*16);
+            for (int j=0; j<16; j++) {
+              ImGui::TableNextColumn();
+              if (i*16+j>=size) continue;
+              if (depth == 8) {
+                ImGui::Text("%.2x",regPool[i*16+j]);
+              } else if (depth == 16) {
+                ImGui::Text("%.4x",regPoolW[i*16+j]);
+              } else {
+                ImGui::Text("??");
+              }
+            }
+          }
+          ImGui::EndTable();
+        }
+        ImGui::PopFont();
+      }
+    }
+  }
+  if (ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows)) curWindow=GUI_WINDOW_REGISTER_VIEW;
   ImGui::End();
 }
 
@@ -2728,7 +2953,7 @@ void FurnaceGUI::doPaste() {
             invalidData=true;
             break;
           }
-          if (iFine<(3+e->song.pat[cursor.xCoarse].effectRows*2)) pat->data[j][iFine+1]=val;
+          if (iFine<(3+e->song.pat[iCoarse].effectRows*2)) pat->data[j][iFine+1]=val;
         }
       }
       iFine++;
@@ -2822,6 +3047,7 @@ void FurnaceGUI::doRedo() {
 
 void FurnaceGUI::play(int row) {
   e->walkSong(loopOrder,loopRow,loopEnd);
+  memset(lastIns,-1,sizeof(int)*DIV_MAX_CHANS);
   if (row>0) {
     e->playToRow(row);
   } else {
@@ -3052,6 +3278,9 @@ void FurnaceGUI::doAction(int what) {
     case GUI_ACTION_WINDOW_CHANNELS:
       nextWindow=GUI_WINDOW_CHANNELS;
       break;
+    case GUI_ACTION_WINDOW_REGISTER_VIEW:
+      nextWindow=GUI_WINDOW_REGISTER_VIEW;
+      break;
     
     case GUI_ACTION_COLLAPSE_WINDOW:
       collapseWindow=true;
@@ -3120,6 +3349,9 @@ void FurnaceGUI::doAction(int what) {
           break;
         case GUI_WINDOW_CHANNELS:
           channelsOpen=false;
+          break;
+        case GUI_WINDOW_REGISTER_VIEW:
+          regViewOpen=false;
           break;
         default:
           break;
@@ -3808,55 +4040,70 @@ bool dirExists(String what) {
 }
 
 void FurnaceGUI::openFileDialog(FurnaceGUIFileDialogs type) {
-  if (!dirExists(workingDir)) workingDir=getHomeDir();
+  ImGuiFileDialog::Instance()->DpiScale=dpiScale;
   switch (type) {
     case GUI_FILE_OPEN:
-      ImGuiFileDialog::Instance()->OpenModal("FileDialog","Open File","compatible files{.fur,.dmf},.*",workingDir);
+      if (!dirExists(workingDirSong)) workingDirSong=getHomeDir();
+      ImGuiFileDialog::Instance()->OpenModal("FileDialog","Open File","compatible files{.fur,.dmf},.*",workingDirSong);
       break;
     case GUI_FILE_SAVE:
-      ImGuiFileDialog::Instance()->OpenModal("FileDialog","Save File","Furnace song{.fur},DefleMask 1.1 module{.dmf}",workingDir,1,nullptr,ImGuiFileDialogFlags_ConfirmOverwrite);
+      if (!dirExists(workingDirSong)) workingDirSong=getHomeDir();
+      ImGuiFileDialog::Instance()->OpenModal("FileDialog","Save File","Furnace song{.fur},DefleMask 1.1 module{.dmf}",workingDirSong,1,nullptr,ImGuiFileDialogFlags_ConfirmOverwrite);
       break;
     case GUI_FILE_SAVE_DMF_LEGACY:
-      ImGuiFileDialog::Instance()->OpenModal("FileDialog","Save File","DefleMask 1.0/legacy module{.dmf}",workingDir,1,nullptr,ImGuiFileDialogFlags_ConfirmOverwrite);
+      if (!dirExists(workingDirSong)) workingDirSong=getHomeDir();
+      ImGuiFileDialog::Instance()->OpenModal("FileDialog","Save File","DefleMask 1.0/legacy module{.dmf}",workingDirSong,1,nullptr,ImGuiFileDialogFlags_ConfirmOverwrite);
       break;
     case GUI_FILE_INS_OPEN:
-      ImGuiFileDialog::Instance()->OpenModal("FileDialog","Load Instrument","compatible files{.fui,.dmp,.tfi,.vgi},.*",workingDir);
+      if (!dirExists(workingDirIns)) workingDirIns=getHomeDir();
+      ImGuiFileDialog::Instance()->OpenModal("FileDialog","Load Instrument","compatible files{.fui,.dmp,.tfi,.vgi},.*",workingDirIns);
       break;
     case GUI_FILE_INS_SAVE:
-      ImGuiFileDialog::Instance()->OpenModal("FileDialog","Save Instrument","Furnace instrument{.fui}",workingDir,1,nullptr,ImGuiFileDialogFlags_ConfirmOverwrite);
+      if (!dirExists(workingDirIns)) workingDirIns=getHomeDir();
+      ImGuiFileDialog::Instance()->OpenModal("FileDialog","Save Instrument","Furnace instrument{.fui}",workingDirIns,1,nullptr,ImGuiFileDialogFlags_ConfirmOverwrite);
       break;
     case GUI_FILE_WAVE_OPEN:
-      ImGuiFileDialog::Instance()->OpenModal("FileDialog","Load Wavetable","compatible files{.fuw,.dmw},.*",workingDir);
+      if (!dirExists(workingDirWave)) workingDirWave=getHomeDir();
+      ImGuiFileDialog::Instance()->OpenModal("FileDialog","Load Wavetable","compatible files{.fuw,.dmw},.*",workingDirWave);
       break;
     case GUI_FILE_WAVE_SAVE:
-      ImGuiFileDialog::Instance()->OpenModal("FileDialog","Save Wavetable","Furnace wavetable{.fuw}",workingDir,1,nullptr,ImGuiFileDialogFlags_ConfirmOverwrite);
+      if (!dirExists(workingDirWave)) workingDirWave=getHomeDir();
+      ImGuiFileDialog::Instance()->OpenModal("FileDialog","Save Wavetable","Furnace wavetable{.fuw}",workingDirWave,1,nullptr,ImGuiFileDialogFlags_ConfirmOverwrite);
       break;
     case GUI_FILE_SAMPLE_OPEN:
-      ImGuiFileDialog::Instance()->OpenModal("FileDialog","Load Sample","Wave file{.wav},.*",workingDir);
+      if (!dirExists(workingDirSample)) workingDirSample=getHomeDir();
+      ImGuiFileDialog::Instance()->OpenModal("FileDialog","Load Sample","Wave file{.wav},.*",workingDirSample);
       break;
     case GUI_FILE_SAMPLE_SAVE:
-      ImGuiFileDialog::Instance()->OpenModal("FileDialog","Save Sample","Wave file{.wav}",workingDir,1,nullptr,ImGuiFileDialogFlags_ConfirmOverwrite);
+      if (!dirExists(workingDirSample)) workingDirSample=getHomeDir();
+      ImGuiFileDialog::Instance()->OpenModal("FileDialog","Save Sample","Wave file{.wav}",workingDirSample,1,nullptr,ImGuiFileDialogFlags_ConfirmOverwrite);
       break;
     case GUI_FILE_EXPORT_AUDIO_ONE:
-      ImGuiFileDialog::Instance()->OpenModal("FileDialog","Export Audio","Wave file{.wav}",workingDir,1,nullptr,ImGuiFileDialogFlags_ConfirmOverwrite);
+      if (!dirExists(workingDirAudioExport)) workingDirAudioExport=getHomeDir();
+      ImGuiFileDialog::Instance()->OpenModal("FileDialog","Export Audio","Wave file{.wav}",workingDirAudioExport,1,nullptr,ImGuiFileDialogFlags_ConfirmOverwrite);
       break;
     case GUI_FILE_EXPORT_AUDIO_PER_SYS:
-      ImGuiFileDialog::Instance()->OpenModal("FileDialog","Export Audio","Wave file{.wav}",workingDir,1,nullptr,ImGuiFileDialogFlags_ConfirmOverwrite);
+      if (!dirExists(workingDirAudioExport)) workingDirAudioExport=getHomeDir();
+      ImGuiFileDialog::Instance()->OpenModal("FileDialog","Export Audio","Wave file{.wav}",workingDirAudioExport,1,nullptr,ImGuiFileDialogFlags_ConfirmOverwrite);
       break;
     case GUI_FILE_EXPORT_AUDIO_PER_CHANNEL:
-      ImGuiFileDialog::Instance()->OpenModal("FileDialog","Export Audio","Wave file{.wav}",workingDir,1,nullptr,ImGuiFileDialogFlags_ConfirmOverwrite);
+      if (!dirExists(workingDirAudioExport)) workingDirAudioExport=getHomeDir();
+      ImGuiFileDialog::Instance()->OpenModal("FileDialog","Export Audio","Wave file{.wav}",workingDirAudioExport,1,nullptr,ImGuiFileDialogFlags_ConfirmOverwrite);
       break;
     case GUI_FILE_EXPORT_VGM:
-      ImGuiFileDialog::Instance()->OpenModal("FileDialog","Export VGM",".vgm",workingDir,1,nullptr,ImGuiFileDialogFlags_ConfirmOverwrite);
+      if (!dirExists(workingDirVGMExport)) workingDirVGMExport=getHomeDir();
+      ImGuiFileDialog::Instance()->OpenModal("FileDialog","Export VGM",".vgm",workingDirVGMExport,1,nullptr,ImGuiFileDialogFlags_ConfirmOverwrite);
       break;
     case GUI_FILE_EXPORT_ROM:
       showError("Coming soon!");
       break;
     case GUI_FILE_LOAD_MAIN_FONT:
-      ImGuiFileDialog::Instance()->OpenModal("FileDialog","Select Font","compatible files{.ttf,.otf,.ttc}",workingDir);
+      if (!dirExists(workingDirFont)) workingDirFont=getHomeDir();
+      ImGuiFileDialog::Instance()->OpenModal("FileDialog","Select Font","compatible files{.ttf,.otf,.ttc}",workingDirFont);
       break;
     case GUI_FILE_LOAD_PAT_FONT:
-      ImGuiFileDialog::Instance()->OpenModal("FileDialog","Select Font","compatible files{.ttf,.otf,.ttc}",workingDir);
+      if (!dirExists(workingDirFont)) workingDirFont=getHomeDir();
+      ImGuiFileDialog::Instance()->OpenModal("FileDialog","Select Font","compatible files{.ttf,.otf,.ttc}",workingDirFont);
       break;
   }
   curFileDialog=type;
@@ -4283,22 +4530,11 @@ bool FurnaceGUI::loop() {
 
     ImGui::BeginMainMenuBar();
     if (ImGui::BeginMenu("file")) {
-      if (ImGui::MenuItem("new")) {
+      if (ImGui::MenuItem("new...")) {
         if (modified) {
           showWarning("Unsaved changes! Are you sure?",GUI_WARN_NEW);
         } else {
-          e->createNew();
-          undoHist.clear();
-          redoHist.clear();
-          curFileName="";
-          modified=false;
-          curNibble=false;
-          orderNibble=false;
-          orderCursor=-1;
-          selStart=SelectionPoint();
-          selEnd=SelectionPoint();
-          cursor=SelectionPoint();
-          updateWindowTitle();
+          displayNew=true;
         }
       }
       if (ImGui::MenuItem("open...",BIND_FOR(GUI_ACTION_OPEN))) {
@@ -4370,26 +4606,34 @@ bool FurnaceGUI::loop() {
       }
       ImGui::Separator();
       if (ImGui::BeginMenu("add system...")) {
-        sysAddOption(DIV_SYSTEM_GENESIS);
-        sysAddOption(DIV_SYSTEM_GENESIS_EXT);
+        sysAddOption(DIV_SYSTEM_YM2612);
+        sysAddOption(DIV_SYSTEM_YM2612_EXT);
         sysAddOption(DIV_SYSTEM_SMS);
         sysAddOption(DIV_SYSTEM_GB);
         sysAddOption(DIV_SYSTEM_PCE);
         sysAddOption(DIV_SYSTEM_NES);
         sysAddOption(DIV_SYSTEM_C64_8580);
         sysAddOption(DIV_SYSTEM_C64_6581);
-        sysAddOption(DIV_SYSTEM_ARCADE);
+        sysAddOption(DIV_SYSTEM_YM2151);
+        sysAddOption(DIV_SYSTEM_SEGAPCM);
+        sysAddOption(DIV_SYSTEM_SEGAPCM_COMPAT);
         sysAddOption(DIV_SYSTEM_YM2610);
         sysAddOption(DIV_SYSTEM_YM2610_EXT);
         sysAddOption(DIV_SYSTEM_YM2610_FULL);
         sysAddOption(DIV_SYSTEM_YM2610_FULL_EXT);
+        sysAddOption(DIV_SYSTEM_YM2610B);
+        sysAddOption(DIV_SYSTEM_YM2610B_EXT);
         sysAddOption(DIV_SYSTEM_AY8910);
         sysAddOption(DIV_SYSTEM_AMIGA);
-        sysAddOption(DIV_SYSTEM_YM2151);
-        sysAddOption(DIV_SYSTEM_YM2612);
+        sysAddOption(DIV_SYSTEM_PCSPKR);
+        sysAddOption(DIV_SYSTEM_OPLL);
+        sysAddOption(DIV_SYSTEM_OPLL_DRUMS);
+        sysAddOption(DIV_SYSTEM_VRC7);
         sysAddOption(DIV_SYSTEM_TIA);
         sysAddOption(DIV_SYSTEM_SAA1099);
         sysAddOption(DIV_SYSTEM_AY8930);
+        sysAddOption(DIV_SYSTEM_LYNX);
+        sysAddOption(DIV_SYSTEM_QSOUND);
         ImGui::EndMenu();
       }
       if (ImGui::BeginMenu("configure system...")) {
@@ -4399,23 +4643,28 @@ bool FurnaceGUI::loop() {
             bool restart=settings.restartOnFlagChange;
             bool sysPal=flags&1;
             switch (e->song.system[i]) {
-              case DIV_SYSTEM_GENESIS:
-              case DIV_SYSTEM_GENESIS_EXT: {
+              case DIV_SYSTEM_YM2612:
+              case DIV_SYSTEM_YM2612_EXT: {
                 if (ImGui::RadioButton("NTSC (7.67MHz)",(flags&3)==0)) {
                   e->setSysFlags(i,(flags&0x80000000)|0,restart);
+                  updateWindowTitle();
                 }
                 if (ImGui::RadioButton("PAL (7.61MHz)",(flags&3)==1)) {
                   e->setSysFlags(i,(flags&0x80000000)|1,restart);
+                  updateWindowTitle();
                 }
                 if (ImGui::RadioButton("FM Towns (8MHz)",(flags&3)==2)) {
                   e->setSysFlags(i,(flags&0x80000000)|2,restart);
+                  updateWindowTitle();
                 }
                 if (ImGui::RadioButton("AtGames Genesis (6.13MHz)",(flags&3)==3)) {
                   e->setSysFlags(i,(flags&0x80000000)|3,restart);
+                  updateWindowTitle();
                 }
                 bool ladder=flags&0x80000000;
                 if (ImGui::Checkbox("Enable DAC distortion",&ladder)) {
                   e->setSysFlags(i,(flags&(~0x80000000))|(ladder?0x80000000:0),restart);
+                  updateWindowTitle();
                 }
                 break;
               }
@@ -4423,22 +4672,32 @@ bool FurnaceGUI::loop() {
                 ImGui::Text("Clock rate:");
                 if (ImGui::RadioButton("NTSC (3.58MHz)",(flags&3)==0)) {
                   e->setSysFlags(i,(flags&(~3))|0,restart);
+                  updateWindowTitle();
                 }
                 if (ImGui::RadioButton("PAL (3.55MHz)",(flags&3)==1)) {
                   e->setSysFlags(i,(flags&(~3))|1,restart);
+                  updateWindowTitle();
                 }
                 if (ImGui::RadioButton("BBC Micro (4MHz)",(flags&3)==2)) {
                   e->setSysFlags(i,(flags&(~3))|2,restart);
+                  updateWindowTitle();
+                }
+                if (ImGui::RadioButton("Half NTSC (1.79MHz)",(flags&3)==3)) {
+                  e->setSysFlags(i,(flags&(~3))|3,restart);
+                  updateWindowTitle();
                 }
                 ImGui::Text("Chip type:");
                 if (ImGui::RadioButton("Sega VDP/Master System",((flags>>2)&3)==0)) {
                   e->setSysFlags(i,(flags&(~12))|0,restart);
+                  updateWindowTitle();
                 }
                 if (ImGui::RadioButton("TI SN76489",((flags>>2)&3)==1)) {
                   e->setSysFlags(i,(flags&(~12))|4,restart);
+                  updateWindowTitle();
                 }
                 if (ImGui::RadioButton("TI SN76489 with Atari-like short noise",((flags>>2)&3)==2)) {
                   e->setSysFlags(i,(flags&(~12))|8,restart);
+                  updateWindowTitle();
                 }
                 /*if (ImGui::RadioButton("Game Gear",(flags>>2)==3)) {
                   e->setSysFlags(i,(flags&3)|12);
@@ -4447,78 +4706,138 @@ bool FurnaceGUI::loop() {
                 bool noPhaseReset=flags&16;
                 if (ImGui::Checkbox("Disable noise period change phase reset",&noPhaseReset)) {
                   e->setSysFlags(i,(flags&(~16))|(noPhaseReset<<4),restart);
+                  updateWindowTitle();
                 }
                 break;
               }
-              case DIV_SYSTEM_ARCADE:
+              case DIV_SYSTEM_OPLL:
+              case DIV_SYSTEM_OPLL_DRUMS:
+              case DIV_SYSTEM_VRC7: {
+                ImGui::Text("Clock rate:");
+                if (ImGui::RadioButton("NTSC (3.58MHz)",(flags&15)==0)) {
+                  e->setSysFlags(i,(flags&(~15))|0,restart);
+                  updateWindowTitle();
+                }
+                if (ImGui::RadioButton("PAL (3.55MHz)",(flags&15)==1)) {
+                  e->setSysFlags(i,(flags&(~15))|1,restart);
+                  updateWindowTitle();
+                }
+                if (ImGui::RadioButton("BBC Micro (4MHz)",(flags&15)==2)) {
+                  e->setSysFlags(i,(flags&(~15))|2,restart);
+                  updateWindowTitle();
+                }
+                if (ImGui::RadioButton("Half NTSC (1.79MHz)",(flags&15)==3)) {
+                  e->setSysFlags(i,(flags&(~15))|3,restart);
+                  updateWindowTitle();
+                }
+                if (e->song.system[i]!=DIV_SYSTEM_VRC7) {
+                  ImGui::Text("Patch set:");
+                  if (ImGui::RadioButton("Yamaha YM2413",((flags>>4)&15)==0)) {
+                    e->setSysFlags(i,(flags&(~0xf0))|0,restart);
+                    updateWindowTitle();
+                  }
+                  if (ImGui::RadioButton("Yamaha YMF281",((flags>>4)&15)==1)) {
+                    e->setSysFlags(i,(flags&(~0xf0))|0x10,restart);
+                    updateWindowTitle();
+                  }
+                  if (ImGui::RadioButton("Yamaha YM2423",((flags>>4)&15)==2)) {
+                    e->setSysFlags(i,(flags&(~0xf0))|0x20,restart);
+                    updateWindowTitle();
+                  }
+                  if (ImGui::RadioButton("Konami VRC7",((flags>>4)&15)==3)) {
+                    e->setSysFlags(i,(flags&(~0xf0))|0x30,restart);
+                    updateWindowTitle();
+                  }
+                }
+                break;
+              }
               case DIV_SYSTEM_YM2151:
                 if (ImGui::RadioButton("NTSC (3.58MHz)",flags==0)) {
                   e->setSysFlags(i,0,restart);
+                  updateWindowTitle();
                 }
                 if (ImGui::RadioButton("PAL (3.55MHz)",flags==1)) {
                   e->setSysFlags(i,1,restart);
+                  updateWindowTitle();
                 }
                 if (ImGui::RadioButton("X68000 (4MHz)",flags==2)) {
                   e->setSysFlags(i,2,restart);
+                  updateWindowTitle();
                 }
                 break;
               case DIV_SYSTEM_NES:
                 if (ImGui::RadioButton("NTSC (1.79MHz)",flags==0)) {
                   e->setSysFlags(i,0,restart);
+                  updateWindowTitle();
                 }
                 if (ImGui::RadioButton("PAL (1.67MHz)",flags==1)) {
                   e->setSysFlags(i,1,restart);
+                  updateWindowTitle();
                 }
                 if (ImGui::RadioButton("Dendy (1.77MHz)",flags==2)) {
                   e->setSysFlags(i,2,restart);
+                  updateWindowTitle();
                 }
                 break;
               case DIV_SYSTEM_AY8910:
               case DIV_SYSTEM_AY8930: {
                 ImGui::Text("Clock rate:");
-                if (ImGui::RadioButton("1.79MHz (ZX Spectrum/MSX NTSC)",(flags&15)==0)) {
+                if (ImGui::RadioButton("1.79MHz (ZX Spectrum NTSC/MSX)",(flags&15)==0)) {
                   e->setSysFlags(i,(flags&(~15))|0,restart);
+                  updateWindowTitle();
                 }
-                if (ImGui::RadioButton("1.77MHz (ZX Spectrum/MSX PAL)",(flags&15)==1)) {
+                if (ImGui::RadioButton("1.77MHz (ZX Spectrum)",(flags&15)==1)) {
                   e->setSysFlags(i,(flags&(~15))|1,restart);
+                  updateWindowTitle();
                 }
                 if (ImGui::RadioButton("1.75MHz (ZX Spectrum)",(flags&15)==2)) {
                   e->setSysFlags(i,(flags&(~15))|2,restart);
+                  updateWindowTitle();
                 }
                 if (ImGui::RadioButton("2MHz (Atari ST)",(flags&15)==3)) {
                   e->setSysFlags(i,(flags&(~15))|3,restart);
+                  updateWindowTitle();
                 }
                 if (ImGui::RadioButton("1.5MHz (Vectrex)",(flags&15)==4)) {
                   e->setSysFlags(i,(flags&(~15))|4,restart);
+                  updateWindowTitle();
                 }
                 if (ImGui::RadioButton("1MHz (Amstrad CPC)",(flags&15)==5)) {
                   e->setSysFlags(i,(flags&(~15))|5,restart);
+                  updateWindowTitle();
                 }
                 if (ImGui::RadioButton("0.89MHz (Sunsoft 5B)",(flags&15)==6)) {
                   e->setSysFlags(i,(flags&(~15))|6,restart);
+                  updateWindowTitle();
                 }
                 if (ImGui::RadioButton("1.67MHz (?)",(flags&15)==7)) {
                   e->setSysFlags(i,(flags&(~15))|7,restart);
+                  updateWindowTitle();
                 }
                 if (ImGui::RadioButton("0.83MHz (Sunsoft 5B on PAL)",(flags&15)==8)) {
                   e->setSysFlags(i,(flags&(~15))|8,restart);
+                  updateWindowTitle();
                 }
                 if (e->song.system[i]==DIV_SYSTEM_AY8910) {
                   ImGui::Text("Chip type:");
                   if (ImGui::RadioButton("AY-3-8910",(flags&0x30)==0)) {
                     e->setSysFlags(i,(flags&(~0x30))|0,restart);
+                    updateWindowTitle();
                   }
                   if (ImGui::RadioButton("YM2149(F)",(flags&0x30)==16)) {
                     e->setSysFlags(i,(flags&(~0x30))|16,restart);
+                    updateWindowTitle();
                   }
                   if (ImGui::RadioButton("Sunsoft 5B",(flags&0x30)==32)) {
                     e->setSysFlags(i,(flags&(~0x30))|32,restart);
+                    updateWindowTitle();
                   }
                 }
                 bool stereo=flags&0x40;
                 ImGui::BeginDisabled((flags&0x30)==32);
                 if (ImGui::Checkbox("Stereo##_AY_STEREO",&stereo)) {
                   e->setSysFlags(i,(flags&(~0x40))|(stereo?0x40:0),restart);
+                  updateWindowTitle();
                 }
                 ImGui::EndDisabled();
                 break;
@@ -4526,12 +4845,15 @@ bool FurnaceGUI::loop() {
               case DIV_SYSTEM_SAA1099:
                 if (ImGui::RadioButton("SAM Coupé (8MHz)",flags==0)) {
                   e->setSysFlags(i,0,restart);
+                  updateWindowTitle();
                 }
                 if (ImGui::RadioButton("NTSC (7.15MHz)",flags==1)) {
                   e->setSysFlags(i,1,restart);
+                  updateWindowTitle();
                 }
                 if (ImGui::RadioButton("PAL (7.09MHz)",flags==2)) {
                   e->setSysFlags(i,2,restart);
+                  updateWindowTitle();
                 }
                 break;
               case DIV_SYSTEM_AMIGA: {
@@ -4541,7 +4863,8 @@ bool FurnaceGUI::loop() {
                   if (stereoSep<0) stereoSep=0;
                   if (stereoSep>127) stereoSep=127;
                   e->setSysFlags(i,(flags&1)|((stereoSep&127)<<8),restart);
-                }
+                  updateWindowTitle();
+                } rightClickable
                 /* TODO LATER: I want 0.5 out already
                 if (ImGui::RadioButton("Amiga 500 (OCS)",(flags&2)==0)) {
                   e->setSysFlags(i,flags&1);
@@ -4552,7 +4875,47 @@ bool FurnaceGUI::loop() {
                 sysPal=flags&1;
                 if (ImGui::Checkbox("PAL",&sysPal)) {
                   e->setSysFlags(i,(flags&2)|sysPal,restart);
+                  updateWindowTitle();
                 }
+                break;
+              }
+              case DIV_SYSTEM_PCSPKR: {
+                ImGui::Text("Speaker type:");
+                if (ImGui::RadioButton("Unfiltered",(flags&3)==0)) {
+                  e->setSysFlags(i,(flags&(~3))|0,restart);
+                  updateWindowTitle();
+                }
+                if (ImGui::RadioButton("Cone",(flags&3)==1)) {
+                  e->setSysFlags(i,(flags&(~3))|1,restart);
+                  updateWindowTitle();
+                }
+                if (ImGui::RadioButton("Piezo",(flags&3)==2)) {
+                  e->setSysFlags(i,(flags&(~3))|2,restart);
+                  updateWindowTitle();
+                }
+                if (ImGui::RadioButton("Use system beeper (Linux only!)",(flags&3)==3)) {
+                  e->setSysFlags(i,(flags&(~3))|3,restart);
+                  updateWindowTitle();
+                }
+                break;
+              }
+              case DIV_SYSTEM_QSOUND: {
+                ImGui::Text("Echo delay:");
+                int echoBufSize=2725 - (flags & 4095);
+                if (ImGui::SliderInt("##EchoBufSize",&echoBufSize,0,2725)) {
+                  if (echoBufSize<0) echoBufSize=0;
+                  if (echoBufSize>2725) echoBufSize=2725;
+                  e->setSysFlags(i,(flags & ~4095) | ((2725 - echoBufSize) & 4095),restart);
+                  updateWindowTitle();
+                } rightClickable
+                ImGui::Text("Echo feedback:");
+                int echoFeedback=(flags>>12)&255;
+                if (ImGui::SliderInt("##EchoFeedback",&echoFeedback,0,255)) {
+                  if (echoFeedback<0) echoFeedback=0;
+                  if (echoFeedback>255) echoFeedback=255;
+                  e->setSysFlags(i,(flags & ~(255 << 12)) | ((echoFeedback & 255) << 12),restart);
+                  updateWindowTitle();
+                } rightClickable
                 break;
               }
               case DIV_SYSTEM_GB:
@@ -4560,12 +4923,15 @@ bool FurnaceGUI::loop() {
               case DIV_SYSTEM_YM2610_EXT:
               case DIV_SYSTEM_YM2610_FULL:
               case DIV_SYSTEM_YM2610_FULL_EXT:
+              case DIV_SYSTEM_YM2610B:
+              case DIV_SYSTEM_YM2610B_EXT:
               case DIV_SYSTEM_YMU759:
                 ImGui::Text("nothing to configure");
                 break;
               default:
                 if (ImGui::Checkbox("PAL",&sysPal)) {
                   e->setSysFlags(i,sysPal,restart);
+                  updateWindowTitle();
                 }
                 break;
             }
@@ -4577,26 +4943,34 @@ bool FurnaceGUI::loop() {
       if (ImGui::BeginMenu("change system...")) {
         for (int i=0; i<e->song.systemLen; i++) {
           if (ImGui::BeginMenu(fmt::sprintf("%d. %s##_SYSC%d",i+1,getSystemName(e->song.system[i]),i).c_str())) {
-            sysChangeOption(i,DIV_SYSTEM_GENESIS);
-            sysChangeOption(i,DIV_SYSTEM_GENESIS_EXT);
+            sysChangeOption(i,DIV_SYSTEM_YM2612);
+            sysChangeOption(i,DIV_SYSTEM_YM2612_EXT);
             sysChangeOption(i,DIV_SYSTEM_SMS);
             sysChangeOption(i,DIV_SYSTEM_GB);
             sysChangeOption(i,DIV_SYSTEM_PCE);
             sysChangeOption(i,DIV_SYSTEM_NES);
             sysChangeOption(i,DIV_SYSTEM_C64_8580);
             sysChangeOption(i,DIV_SYSTEM_C64_6581);
-            sysChangeOption(i,DIV_SYSTEM_ARCADE);
+            sysChangeOption(i,DIV_SYSTEM_YM2151);
+            sysChangeOption(i,DIV_SYSTEM_SEGAPCM);
+            sysChangeOption(i,DIV_SYSTEM_SEGAPCM_COMPAT);
             sysChangeOption(i,DIV_SYSTEM_YM2610);
             sysChangeOption(i,DIV_SYSTEM_YM2610_EXT);
             sysChangeOption(i,DIV_SYSTEM_YM2610_FULL);
             sysChangeOption(i,DIV_SYSTEM_YM2610_FULL_EXT);
+            sysChangeOption(i,DIV_SYSTEM_YM2610B);
+            sysChangeOption(i,DIV_SYSTEM_YM2610B_EXT);
             sysChangeOption(i,DIV_SYSTEM_AY8910);
             sysChangeOption(i,DIV_SYSTEM_AMIGA);
-            sysChangeOption(i,DIV_SYSTEM_YM2151);
-            sysChangeOption(i,DIV_SYSTEM_YM2612);
+            sysChangeOption(i,DIV_SYSTEM_PCSPKR);
+            sysChangeOption(i,DIV_SYSTEM_OPLL);
+            sysChangeOption(i,DIV_SYSTEM_OPLL_DRUMS);
+            sysChangeOption(i,DIV_SYSTEM_VRC7);
             sysChangeOption(i,DIV_SYSTEM_TIA);
             sysChangeOption(i,DIV_SYSTEM_SAA1099);
             sysChangeOption(i,DIV_SYSTEM_AY8930);
+            sysChangeOption(i,DIV_SYSTEM_LYNX);
+            sysChangeOption(i,DIV_SYSTEM_QSOUND);
             ImGui::EndMenu();
           }
         }
@@ -4641,6 +5015,9 @@ bool FurnaceGUI::loop() {
       ImGui::EndMenu();
     }
     if (ImGui::BeginMenu("settings")) {
+      if (ImGui::MenuItem("reset layout")) {
+        showWarning("Are you sure you want to reset the workspace layout?",GUI_WARN_RESET_LAYOUT);
+      }
       if (ImGui::MenuItem("settings...",BIND_FOR(GUI_ACTION_WINDOW_SETTINGS))) {
         syncSettings();
         settingsOpen=true;
@@ -4667,6 +5044,7 @@ bool FurnaceGUI::loop() {
       if (ImGui::MenuItem("piano/input pad",BIND_FOR(GUI_ACTION_WINDOW_PIANO),pianoOpen)) pianoOpen=!pianoOpen;
       if (ImGui::MenuItem("oscilloscope",BIND_FOR(GUI_ACTION_WINDOW_OSCILLOSCOPE),oscOpen)) oscOpen=!oscOpen;
       if (ImGui::MenuItem("volume meter",BIND_FOR(GUI_ACTION_WINDOW_VOL_METER),volMeterOpen)) volMeterOpen=!volMeterOpen;
+      if (ImGui::MenuItem("register view",BIND_FOR(GUI_ACTION_WINDOW_REGISTER_VIEW),regViewOpen)) regViewOpen=!regViewOpen;
       if (ImGui::MenuItem("statistics",BIND_FOR(GUI_ACTION_WINDOW_STATS),statsOpen)) statsOpen=!statsOpen;
      
       ImGui::EndMenu();
@@ -4750,19 +5128,19 @@ bool FurnaceGUI::loop() {
 
     ImGui::DockSpaceOverViewport();
 
+    drawPattern();
     drawEditControls();
     drawSongInfo();
     drawOrders();
-    drawInsList();
-    drawInsEdit();
-    drawWaveList();
-    drawWaveEdit();
     drawSampleList();
     drawSampleEdit();
+    drawWaveList();
+    drawWaveEdit();
+    drawInsList();
+    drawInsEdit();
     drawMixer();
     drawOsc();
     drawVolMeter();
-    drawPattern();
     drawSettings();
     drawDebug();
     drawStats();
@@ -4770,9 +5148,42 @@ bool FurnaceGUI::loop() {
     drawPiano();
     drawNotes();
     drawChannels();
+    drawRegView();
 
     if (ImGuiFileDialog::Instance()->Display("FileDialog",ImGuiWindowFlags_NoCollapse|ImGuiWindowFlags_NoMove,ImVec2(600.0f*dpiScale,400.0f*dpiScale),ImVec2(scrW*dpiScale,scrH*dpiScale))) {
       //ImGui::GetIO().ConfigFlags&=~ImGuiConfigFlags_NavEnableKeyboard;
+      switch (curFileDialog) {
+        case GUI_FILE_OPEN:
+        case GUI_FILE_SAVE:
+        case GUI_FILE_SAVE_DMF_LEGACY:
+          workingDirSong=ImGuiFileDialog::Instance()->GetCurrentPath()+DIR_SEPARATOR_STR;
+          break;
+        case GUI_FILE_INS_OPEN:
+        case GUI_FILE_INS_SAVE:
+          workingDirIns=ImGuiFileDialog::Instance()->GetCurrentPath()+DIR_SEPARATOR_STR;
+          break;
+        case GUI_FILE_WAVE_OPEN:
+        case GUI_FILE_WAVE_SAVE:
+          workingDirWave=ImGuiFileDialog::Instance()->GetCurrentPath()+DIR_SEPARATOR_STR;
+          break;
+        case GUI_FILE_SAMPLE_OPEN:
+        case GUI_FILE_SAMPLE_SAVE:
+          workingDirSample=ImGuiFileDialog::Instance()->GetCurrentPath()+DIR_SEPARATOR_STR;
+          break;
+        case GUI_FILE_EXPORT_AUDIO_ONE:
+        case GUI_FILE_EXPORT_AUDIO_PER_SYS:
+        case GUI_FILE_EXPORT_AUDIO_PER_CHANNEL:
+          workingDirAudioExport=ImGuiFileDialog::Instance()->GetCurrentPath()+DIR_SEPARATOR_STR;
+          break;
+        case GUI_FILE_EXPORT_VGM:
+        case GUI_FILE_EXPORT_ROM:
+          workingDirVGMExport=ImGuiFileDialog::Instance()->GetCurrentPath()+DIR_SEPARATOR_STR;
+          break;
+        case GUI_FILE_LOAD_MAIN_FONT:
+        case GUI_FILE_LOAD_PAT_FONT:
+          workingDirFont=ImGuiFileDialog::Instance()->GetCurrentPath()+DIR_SEPARATOR_STR;
+          break;
+      }
       if (ImGuiFileDialog::Instance()->IsOk()) {
         fileName=ImGuiFileDialog::Instance()->GetFilePathName();
         if (fileName!="") {
@@ -4782,6 +5193,9 @@ bool FurnaceGUI::loop() {
             } else {
               checkExtension(".dmf");
             }
+          }
+          if (curFileDialog==GUI_FILE_SAVE_DMF_LEGACY) {
+            checkExtension(".dmf");
           }
           if (curFileDialog==GUI_FILE_SAMPLE_SAVE ||
               curFileDialog==GUI_FILE_EXPORT_AUDIO_ONE ||
@@ -4897,12 +5311,6 @@ bool FurnaceGUI::loop() {
           curFileDialog=GUI_FILE_OPEN;
         }
       }
-      workingDir=ImGuiFileDialog::Instance()->GetCurrentPath();
-#ifdef _WIN32
-      workingDir+='\\';
-#else
-      workingDir+='/';
-#endif
       ImGuiFileDialog::Instance()->Close();
     }
 
@@ -4919,6 +5327,11 @@ bool FurnaceGUI::loop() {
     if (displayExporting) {
       displayExporting=false;
       ImGui::OpenPopup("Rendering...");
+    }
+
+    if (displayNew) {
+      displayNew=false;
+      ImGui::OpenPopup("New Song");
     }
 
     if (nextWindow==GUI_WINDOW_ABOUT) {
@@ -4940,6 +5353,13 @@ bool FurnaceGUI::loop() {
       ImGui::EndPopup();
     }
 
+    ImGui::SetNextWindowSizeConstraints(ImVec2(400.0f*dpiScale,200.0f*dpiScale),ImVec2(scrW*dpiScale,scrH*dpiScale));
+    if (ImGui::BeginPopupModal("New Song",NULL,ImGuiWindowFlags_NoMove)) {
+      ImGui::SetWindowPos(ImVec2(((scrW*dpiScale)-ImGui::GetWindowSize().x)*0.5,((scrH*dpiScale)-ImGui::GetWindowSize().y)*0.5));
+      drawNewSong();
+      ImGui::EndPopup();
+    }
+
     if (ImGui::BeginPopupModal("Error",NULL,ImGuiWindowFlags_AlwaysAutoResize)) {
       ImGui::Text("%s",errorString.c_str());
       if (ImGui::Button("OK")) {
@@ -4957,18 +5377,7 @@ bool FurnaceGUI::loop() {
             quit=true;
             break;
           case GUI_WARN_NEW:
-            e->createNew();
-            undoHist.clear();
-            redoHist.clear();
-            curFileName="";
-            modified=false;
-            curNibble=false;
-            orderNibble=false;
-            orderCursor=-1;
-            selStart=SelectionPoint();
-            selEnd=SelectionPoint();
-            cursor=SelectionPoint();
-            updateWindowTitle();
+            displayNew=true;
             break;
           case GUI_WARN_OPEN:
             openFileDialog(GUI_FILE_OPEN);
@@ -4978,6 +5387,10 @@ bool FurnaceGUI::loop() {
               showError(fmt::sprintf("Error while loading file! (%s)",lastError));
             }
             nextFile="";
+            break;
+          case GUI_WARN_RESET_LAYOUT:
+            ImGui::LoadIniSettingsFromMemory(defaultLayout);
+            ImGui::SaveIniSettingsToDisk(finalLayoutPath);
             break;
           case GUI_WARN_GENERIC:
             break;
@@ -5006,6 +5419,10 @@ bool FurnaceGUI::loop() {
     if (willCommit) {
       commitSettings();
       willCommit=false;
+    }
+
+    if (SDL_GetWindowFlags(sdlWin)&SDL_WINDOW_MINIMIZED) {
+      SDL_Delay(100);
     }
   }
   return false;
@@ -5089,7 +5506,11 @@ void FurnaceGUI::parseKeybinds() {
 
 void FurnaceGUI::applyUISettings() {
   ImGuiStyle sty;
-  ImGui::StyleColorsDark(&sty);
+  if (settings.guiColorsBase) {
+    ImGui::StyleColorsLight(&sty);
+  } else {
+    ImGui::StyleColorsDark(&sty);
+  }
 
   if (settings.dpiScale>=0.5f) dpiScale=settings.dpiScale;
 
@@ -5132,6 +5553,7 @@ void FurnaceGUI::applyUISettings() {
   GET_UI_COLOR(GUI_COLOR_INSTR_POKEY,ImVec4(0.5f,1.0f,0.3f,1.0f));
   GET_UI_COLOR(GUI_COLOR_INSTR_BEEPER,ImVec4(0.0f,1.0f,0.0f,1.0f));
   GET_UI_COLOR(GUI_COLOR_INSTR_SWAN,ImVec4(0.3f,0.5f,1.0f,1.0f));
+  GET_UI_COLOR(GUI_COLOR_INSTR_MIKEY,ImVec4(0.5f,1.0f,0.3f,1.0f));
   GET_UI_COLOR(GUI_COLOR_INSTR_UNKNOWN,ImVec4(0.3f,0.3f,0.3f,1.0f));
   GET_UI_COLOR(GUI_COLOR_CHANNEL_FM,ImVec4(0.2f,0.8f,1.0f,1.0f));
   GET_UI_COLOR(GUI_COLOR_CHANNEL_PULSE,ImVec4(0.4f,1.0f,0.2f,1.0f));
@@ -5189,8 +5611,14 @@ void FurnaceGUI::applyUISettings() {
   primaryHover.w=primaryActive.w;
   primary.w=primaryActive.w;
   ImGui::ColorConvertRGBtoHSV(primaryActive.x,primaryActive.y,primaryActive.z,hue,sat,val);
-  ImGui::ColorConvertHSVtoRGB(hue,sat*0.9,val*0.5,primaryHover.x,primaryHover.y,primaryHover.z);
-  ImGui::ColorConvertHSVtoRGB(hue,sat*0.8,val*0.35,primary.x,primary.y,primary.z);
+  if (settings.guiColorsBase) {
+    primary=primaryActive;
+    ImGui::ColorConvertHSVtoRGB(hue,sat*0.9,val*0.9,primaryHover.x,primaryHover.y,primaryHover.z);
+    ImGui::ColorConvertHSVtoRGB(hue,sat,val*0.5,primaryActive.x,primaryActive.y,primaryActive.z);
+  } else {
+    ImGui::ColorConvertHSVtoRGB(hue,sat*0.9,val*0.5,primaryHover.x,primaryHover.y,primaryHover.z);
+    ImGui::ColorConvertHSVtoRGB(hue,sat*0.8,val*0.35,primary.x,primary.y,primary.z);
+  }
 
   ImVec4 secondaryActive=uiColors[GUI_COLOR_ACCENT_SECONDARY];
   ImVec4 secondaryHover, secondary, secondarySemiActive;
@@ -5198,9 +5626,16 @@ void FurnaceGUI::applyUISettings() {
   secondaryHover.w=secondaryActive.w;
   secondary.w=secondaryActive.w;
   ImGui::ColorConvertRGBtoHSV(secondaryActive.x,secondaryActive.y,secondaryActive.z,hue,sat,val);
-  ImGui::ColorConvertHSVtoRGB(hue,sat*0.9,val*0.75,secondarySemiActive.x,secondarySemiActive.y,secondarySemiActive.z);
-  ImGui::ColorConvertHSVtoRGB(hue,sat*0.9,val*0.5,secondaryHover.x,secondaryHover.y,secondaryHover.z);
-  ImGui::ColorConvertHSVtoRGB(hue,sat*0.9,val*0.25,secondary.x,secondary.y,secondary.z);
+  if (settings.guiColorsBase) {
+    secondary=secondaryActive;
+    ImGui::ColorConvertHSVtoRGB(hue,sat*0.9,val*0.7,secondarySemiActive.x,secondarySemiActive.y,secondarySemiActive.z);
+    ImGui::ColorConvertHSVtoRGB(hue,sat*0.9,val*0.9,secondaryHover.x,secondaryHover.y,secondaryHover.z);
+    ImGui::ColorConvertHSVtoRGB(hue,sat,val*0.5,secondaryActive.x,secondaryActive.y,secondaryActive.z);
+  } else {
+    ImGui::ColorConvertHSVtoRGB(hue,sat*0.9,val*0.75,secondarySemiActive.x,secondarySemiActive.y,secondarySemiActive.z);
+    ImGui::ColorConvertHSVtoRGB(hue,sat*0.9,val*0.5,secondaryHover.x,secondaryHover.y,secondaryHover.z);
+    ImGui::ColorConvertHSVtoRGB(hue,sat*0.9,val*0.25,secondary.x,secondary.y,secondary.z);
+  }
 
 
   sty.Colors[ImGuiCol_WindowBg]=uiColors[GUI_COLOR_FRAME_BACKGROUND];
@@ -5359,7 +5794,15 @@ bool FurnaceGUI::init() {
   float dpiScaleF;
 #endif
 
-  workingDir=e->getConfString("lastDir",getHomeDir());
+  String homeDir=getHomeDir();
+  workingDir=e->getConfString("lastDir",homeDir);
+  workingDirSong=e->getConfString("lastDirSong",workingDir);
+  workingDirIns=e->getConfString("lastDirIns",workingDir);
+  workingDirWave=e->getConfString("lastDirWave",workingDir);
+  workingDirSample=e->getConfString("lastDirSample",workingDir);
+  workingDirAudioExport=e->getConfString("lastDirAudioExport",workingDir);
+  workingDirVGMExport=e->getConfString("lastDirVGMExport",workingDir);
+  workingDirFont=e->getConfString("lastDirFont",workingDir);
 
   editControlsOpen=e->getConfBool("editControlsOpen",true);
   ordersOpen=e->getConfBool("ordersOpen",true);
@@ -5380,6 +5823,7 @@ bool FurnaceGUI::init() {
   pianoOpen=e->getConfBool("pianoOpen",false);
   notesOpen=e->getConfBool("notesOpen",false);
   channelsOpen=e->getConfBool("channelsOpen",false);
+  regViewOpen=e->getConfBool("regViewOpen",false);
 
   syncSettings();
 
@@ -5405,7 +5849,7 @@ bool FurnaceGUI::init() {
 
   sdlWin=SDL_CreateWindow("Furnace",SDL_WINDOWPOS_CENTERED,SDL_WINDOWPOS_CENTERED,scrW*dpiScale,scrH*dpiScale,SDL_WINDOW_RESIZABLE|SDL_WINDOW_ALLOW_HIGHDPI);
   if (sdlWin==NULL) {
-    logE("could not open window!\n");
+    logE("could not open window! %s\n",SDL_GetError());
     return false;
   }
 
@@ -5512,6 +5956,13 @@ bool FurnaceGUI::finish() {
   SDL_DestroyWindow(sdlWin);
 
   e->setConf("lastDir",workingDir);
+  e->setConf("lastDirSong",workingDirSong);
+  e->setConf("lastDirIns",workingDirIns);
+  e->setConf("lastDirWave",workingDirWave);
+  e->setConf("lastDirSample",workingDirSample);
+  e->setConf("lastDirAudioExport",workingDirAudioExport);
+  e->setConf("lastDirVGMExport",workingDirVGMExport);
+  e->setConf("lastDirFont",workingDirFont);
 
   // commit last open windows
   e->setConf("editControlsOpen",editControlsOpen);
@@ -5533,6 +5984,7 @@ bool FurnaceGUI::finish() {
   e->setConf("pianoOpen",pianoOpen);
   e->setConf("notesOpen",notesOpen);
   e->setConf("channelsOpen",channelsOpen);
+  e->setConf("regViewOpen",regViewOpen);
 
   // commit last window size
   e->setConf("lastWindowWidth",scrW);
@@ -5554,6 +6006,7 @@ FurnaceGUI::FurnaceGUI():
   displayError(false),
   displayExporting(false),
   vgmExportLoop(true),
+  displayNew(false),
   curFileDialog(GUI_FILE_OPEN),
   warnAction(GUI_WARN_OPEN),
   scrW(1280),
@@ -5581,6 +6034,7 @@ FurnaceGUI::FurnaceGUI():
   isClipping(0),
   extraChannelButtons(0),
   patNameTarget(-1),
+  newSongCategory(0),
   editControlsOpen(true),
   ordersOpen(true),
   insListOpen(true),
@@ -5602,6 +6056,7 @@ FurnaceGUI::FurnaceGUI():
   pianoOpen(false),
   notesOpen(false),
   channelsOpen(false),
+  regViewOpen(false),
   selecting(false),
   curNibble(false),
   orderNibble(false),
@@ -5614,6 +6069,7 @@ FurnaceGUI::FurnaceGUI():
   wantPatName(false),
   curWindow(GUI_WINDOW_NOTHING),
   nextWindow(GUI_WINDOW_NOTHING),
+  nextDesc(NULL),
   wavePreviewOn(false),
   wavePreviewKey((SDL_Scancode)0),
   wavePreviewNote(0),
@@ -5658,6 +6114,7 @@ FurnaceGUI::FurnaceGUI():
   oldOrdersLen(0) {
 
   // octave 1
+  /*
   noteKeys[SDL_SCANCODE_Z]=0;
   noteKeys[SDL_SCANCODE_S]=1;
   noteKeys[SDL_SCANCODE_X]=2;
@@ -5703,6 +6160,7 @@ FurnaceGUI::FurnaceGUI():
 
   // env release
   noteKeys[SDL_SCANCODE_GRAVE]=102;
+  */
 
   // value keys
   valueKeys[SDLK_0]=0;
@@ -5732,6 +6190,471 @@ FurnaceGUI::FurnaceGUI():
   valueKeys[SDLK_KP_8]=8;
   valueKeys[SDLK_KP_9]=9;
 
+  FurnaceGUISysCategory cat;
+
+  cat=FurnaceGUISysCategory("FM");
+  cat.systems.push_back(FurnaceGUISysDef(
+    "Yamaha YM2612", {
+      DIV_SYSTEM_YM2612, 64, 0, 0,
+      0
+    }
+  ));
+  cat.systems.push_back(FurnaceGUISysDef(
+    "Yamaha YM2612 (extended channel 3)", {
+      DIV_SYSTEM_YM2612_EXT, 64, 0, 0,
+      0
+    }
+  ));
+  cat.systems.push_back(FurnaceGUISysDef(
+    "Yamaha YM2151", {
+      DIV_SYSTEM_YM2151, 64, 0, 0,
+      0
+    }
+  ));
+  cat.systems.push_back(FurnaceGUISysDef(
+    "Yamaha YM2610", {
+      DIV_SYSTEM_YM2610_FULL, 64, 0, 0,
+      0
+    }
+  ));
+  cat.systems.push_back(FurnaceGUISysDef(
+    "Yamaha YM2610 (extended channel 2)", {
+      DIV_SYSTEM_YM2610_FULL_EXT, 64, 0, 0,
+      0
+    }
+  ));
+  cat.systems.push_back(FurnaceGUISysDef(
+    "Yamaha YM2610B", {
+      DIV_SYSTEM_YM2610B, 64, 0, 0,
+      0
+    }
+  ));
+  cat.systems.push_back(FurnaceGUISysDef(
+    "Yamaha YM2610B (extended channel 3)", {
+      DIV_SYSTEM_YM2610B_EXT, 64, 0, 0,
+      0
+    }
+  ));
+  cat.systems.push_back(FurnaceGUISysDef(
+    "Yamaha YM2413", {
+      DIV_SYSTEM_OPLL, 64, 0, 0,
+      0
+    }
+  ));
+  sysCategories.push_back(cat);
+
+  cat=FurnaceGUISysCategory("Square");
+  cat.systems.push_back(FurnaceGUISysDef(
+    "TI SN76489", {
+      DIV_SYSTEM_SMS, 64, 0, 0,
+      0
+    }
+  ));
+  cat.systems.push_back(FurnaceGUISysDef(
+    "AY-3-8910", {
+      DIV_SYSTEM_AY8910, 64, 0, 0,
+      0
+    }
+  ));
+  cat.systems.push_back(FurnaceGUISysDef(
+    "Philips SAA1099", {
+      DIV_SYSTEM_SAA1099, 64, 0, 0,
+      0
+    }
+  ));
+  sysCategories.push_back(cat);
+
+  cat=FurnaceGUISysCategory("Sample");
+  cat.systems.push_back(FurnaceGUISysDef(
+    "Amiga", {
+      DIV_SYSTEM_AMIGA, 64, 0, 0,
+      0
+    }
+  ));
+  cat.systems.push_back(FurnaceGUISysDef(
+    "SegaPCM", {
+      DIV_SYSTEM_SEGAPCM, 64, 0, 0,
+      0
+    }
+  ));
+  cat.systems.push_back(FurnaceGUISysDef(
+    "Capcom QSound", {
+      DIV_SYSTEM_QSOUND, 64, 0, 0,
+      0
+    }
+  ));
+  sysCategories.push_back(cat);
+
+  cat=FurnaceGUISysCategory("Game consoles");
+  cat.systems.push_back(FurnaceGUISysDef(
+    "Sega Genesis", {
+      DIV_SYSTEM_YM2612, 64, 0, 0,
+      DIV_SYSTEM_SMS, 24, 0, 0,
+      0
+    }
+  ));
+  cat.systems.push_back(FurnaceGUISysDef(
+    "Sega Genesis (extended channel 3)", {
+      DIV_SYSTEM_YM2612_EXT, 64, 0, 0,
+      DIV_SYSTEM_SMS, 24, 0, 0,
+      0
+    }
+  ));
+  cat.systems.push_back(FurnaceGUISysDef(
+    "Sega Master System", {
+      DIV_SYSTEM_SMS, 64, 0, 0,
+      0
+    }
+  ));
+  cat.systems.push_back(FurnaceGUISysDef(
+    "Sega Master System (with FM expansion)", {
+      DIV_SYSTEM_SMS, 64, 0, 0,
+      DIV_SYSTEM_OPLL, 64, 0, 0,
+      0
+    }
+  ));
+  cat.systems.push_back(FurnaceGUISysDef(
+    "Sega Master System (with FM expansion in drums mode)", {
+      DIV_SYSTEM_SMS, 64, 0, 0,
+      DIV_SYSTEM_OPLL_DRUMS, 64, 0, 0,
+      0
+    }
+  ));
+  cat.systems.push_back(FurnaceGUISysDef(
+    "Game Boy", {
+      DIV_SYSTEM_GB, 64, 0, 0,
+      0
+    }
+  ));
+  cat.systems.push_back(FurnaceGUISysDef(
+    "NEC PC Engine/TurboGrafx-16", {
+      DIV_SYSTEM_PCE, 64, 0, 0,
+      0
+    }
+  ));
+  cat.systems.push_back(FurnaceGUISysDef(
+    "NES", {
+      DIV_SYSTEM_NES, 64, 0, 0,
+      0
+    }
+  ));
+  cat.systems.push_back(FurnaceGUISysDef(
+    "NES with Konami VRC7", {
+      DIV_SYSTEM_NES, 64, 0, 0,
+      DIV_SYSTEM_VRC7, 64, 0, 0,
+      0
+    }
+  ));
+  cat.systems.push_back(FurnaceGUISysDef(
+    "NES with Sunsoft 5B", {
+      DIV_SYSTEM_NES, 64, 0, 0,
+      DIV_SYSTEM_AY8910, 64, 0, 38,
+      0
+    }
+  ));
+  cat.systems.push_back(FurnaceGUISysDef(
+    "Mattel Intellivision", {
+      DIV_SYSTEM_AY8910, 64, 0, 6,
+      0
+    }
+  ));
+  cat.systems.push_back(FurnaceGUISysDef(
+    "Vectrex", {
+      DIV_SYSTEM_AY8910, 64, 0, 4,
+      0
+    }
+  ));
+  cat.systems.push_back(FurnaceGUISysDef(
+    "Neo Geo AES", {
+      DIV_SYSTEM_YM2610_FULL, 64, 0, 0,
+      0
+    }
+  ));
+  cat.systems.push_back(FurnaceGUISysDef(
+    "Neo Geo AES (extended channel 2)", {
+      DIV_SYSTEM_YM2610_FULL_EXT, 64, 0, 0,
+      0
+    }
+  ));
+  cat.systems.push_back(FurnaceGUISysDef(
+    "Atari 2600/7800", {
+      DIV_SYSTEM_TIA, 64, 0, 0,
+      0
+    }
+  ));
+  cat.systems.push_back(FurnaceGUISysDef(
+    "Atari Lynx", {
+      DIV_SYSTEM_LYNX, 64, 0, 0,
+      0
+    }
+  ));
+  sysCategories.push_back(cat);
+
+  cat=FurnaceGUISysCategory("Computers");
+  cat.systems.push_back(FurnaceGUISysDef(
+    "Commodore PET", {
+      DIV_SYSTEM_PET, 64, 0, 0,
+      0
+    }
+  ));
+  cat.systems.push_back(FurnaceGUISysDef(
+    "Commodore VIC-20", {
+      DIV_SYSTEM_VIC20, 64, 0, 1,
+      0
+    }
+  ));
+  cat.systems.push_back(FurnaceGUISysDef(
+    "Commodore 64 (6581 SID)", {
+      DIV_SYSTEM_C64_6581, 64, 0, 1,
+      0
+    }
+  ));
+  cat.systems.push_back(FurnaceGUISysDef(
+    "Commodore 64 (8580 SID)", {
+      DIV_SYSTEM_C64_8580, 64, 0, 1,
+      0
+    }
+  ));
+  cat.systems.push_back(FurnaceGUISysDef(
+    "Amiga", {
+      DIV_SYSTEM_AMIGA, 64, 0, 0,
+      0
+    }
+  ));
+  cat.systems.push_back(FurnaceGUISysDef(
+    "MSX", {
+      DIV_SYSTEM_AY8910, 64, 0, 16,
+      0
+    }
+  ));
+  cat.systems.push_back(FurnaceGUISysDef(
+    "ZX Spectrum (48K)", {
+      DIV_SYSTEM_AY8910, 64, 0, 2,
+      0
+    }
+  ));
+  cat.systems.push_back(FurnaceGUISysDef(
+    "ZX Spectrum (128K)", {
+      DIV_SYSTEM_AY8910, 64, 0, 1,
+      0
+    }
+  ));
+  cat.systems.push_back(FurnaceGUISysDef(
+    "Amstrad CPC", {
+      DIV_SYSTEM_AY8910, 64, 0, 5,
+      0
+    }
+  ));
+  cat.systems.push_back(FurnaceGUISysDef(
+    "SAM Coupé", {
+      DIV_SYSTEM_SAA1099, 64, 0, 0,
+      0
+    }
+  ));
+  cat.systems.push_back(FurnaceGUISysDef(
+    "BBC Micro", {
+      DIV_SYSTEM_SMS, 64, 0, 6,
+      0
+    }
+  ));
+  cat.systems.push_back(FurnaceGUISysDef(
+    "PC (barebones)", {
+      DIV_SYSTEM_PCSPKR, 64, 0, 0,
+      0
+    }
+  ));
+  cat.systems.push_back(FurnaceGUISysDef(
+    "PC + Covox Sound Master", {
+      DIV_SYSTEM_AY8930, 64, 0, 3,
+      DIV_SYSTEM_PCSPKR, 64, 0, 0,
+      0
+    }
+  ));
+  cat.systems.push_back(FurnaceGUISysDef(
+    "PC + Game Blaster", {
+      DIV_SYSTEM_SAA1099, 64, -127, 1,
+      DIV_SYSTEM_SAA1099, 64, 127, 1,
+      DIV_SYSTEM_PCSPKR, 64, 0, 0,
+      0
+    }
+  ));
+  cat.systems.push_back(FurnaceGUISysDef(
+    "PC + AdLib/Sound Blaster", {
+      DIV_SYSTEM_OPL2, 64, 0, 0,
+      DIV_SYSTEM_PCSPKR, 64, 0, 0,
+      0
+    }
+  ));
+  cat.systems.push_back(FurnaceGUISysDef(
+    "PC + AdLib/Sound Blaster (drums mode)", {
+      DIV_SYSTEM_OPL2_DRUMS, 64, 0, 0,
+      DIV_SYSTEM_PCSPKR, 64, 0, 0,
+      0
+    }
+  ));
+  cat.systems.push_back(FurnaceGUISysDef(
+    "PC + Sound Blaster Pro 2", {
+      DIV_SYSTEM_OPL3, 64, 0, 0,
+      DIV_SYSTEM_PCSPKR, 64, 0, 0,
+      0
+    }
+  ));
+  cat.systems.push_back(FurnaceGUISysDef(
+    "PC + Sound Blaster Pro 2 (drums mode)", {
+      DIV_SYSTEM_OPL3_DRUMS, 64, 0, 0,
+      DIV_SYSTEM_PCSPKR, 64, 0, 0,
+      0
+    }
+  ));
+  /*
+  cat.systems.push_back(FurnaceGUISysDef(
+    "Sharp X68000", {
+      DIV_SYSTEM_AY8910, 64, 0, 16,
+      0
+    }
+  ));*/
+  sysCategories.push_back(cat);
+
+  cat=FurnaceGUISysCategory("Arcade systems");
+  cat.systems.push_back(FurnaceGUISysDef(
+    "Bally Midway MCR", {
+      DIV_SYSTEM_AY8910, 64, 0, 0,
+      DIV_SYSTEM_AY8910, 64, 0, 0,
+      0
+    }
+  ));
+  cat.systems.push_back(FurnaceGUISysDef(
+    "Sega Kyugo", {
+      DIV_SYSTEM_AY8910, 64, 0, 4,
+      DIV_SYSTEM_AY8910, 64, 0, 4,
+      0
+    }
+  ));
+  cat.systems.push_back(FurnaceGUISysDef(
+    "Sega OutRun/X Board", {
+      DIV_SYSTEM_YM2151, 64, 0, 0,
+      DIV_SYSTEM_SEGAPCM, 64, 0, 0,
+      0
+    }
+  ));
+  cat.systems.push_back(FurnaceGUISysDef(
+    "Neo Geo MVS", {
+      DIV_SYSTEM_YM2610_FULL, 64, 0, 0,
+      0
+    }
+  ));
+  cat.systems.push_back(FurnaceGUISysDef(
+    "Neo Geo MVS (extended channel 2)", {
+      DIV_SYSTEM_YM2610_FULL_EXT, 64, 0, 0,
+      0
+    }
+  ));
+  cat.systems.push_back(FurnaceGUISysDef(
+    "Taito Arcade", {
+      DIV_SYSTEM_YM2610B, 64, 0, 0,
+      0
+    }
+  ));
+  cat.systems.push_back(FurnaceGUISysDef(
+    "Taito Arcade (extended channel 3)", {
+      DIV_SYSTEM_YM2610B_EXT, 64, 0, 0,
+      0
+    }
+  ));
+  cat.systems.push_back(FurnaceGUISysDef(
+    "Capcom CPS-2 (QSound)", {
+      DIV_SYSTEM_QSOUND, 64, 0, 0,
+      0
+    }
+  ));
+  sysCategories.push_back(cat);
+
+  cat=FurnaceGUISysCategory("DefleMask-compatible");
+  cat.systems.push_back(FurnaceGUISysDef(
+    "Sega Genesis", {
+      DIV_SYSTEM_YM2612, 64, 0, 0,
+      DIV_SYSTEM_SMS, 24, 0, 0,
+      0
+    }
+  ));
+  cat.systems.push_back(FurnaceGUISysDef(
+    "Sega Genesis (extended channel 3)", {
+      DIV_SYSTEM_YM2612_EXT, 64, 0, 0,
+      DIV_SYSTEM_SMS, 24, 0, 0,
+      0
+    }
+  ));
+  cat.systems.push_back(FurnaceGUISysDef(
+    "Sega Master System", {
+      DIV_SYSTEM_SMS, 64, 0, 0,
+      0
+    }
+  ));
+  cat.systems.push_back(FurnaceGUISysDef(
+    "Sega Master System (with FM expansion)", {
+      DIV_SYSTEM_SMS, 64, 0, 0,
+      DIV_SYSTEM_OPLL, 64, 0, 0,
+      0
+    }
+  ));
+  cat.systems.push_back(FurnaceGUISysDef(
+    "Game Boy", {
+      DIV_SYSTEM_GB, 64, 0, 0,
+      0
+    }
+  ));
+  cat.systems.push_back(FurnaceGUISysDef(
+    "NEC PC Engine/TurboGrafx-16", {
+      DIV_SYSTEM_PCE, 64, 0, 0,
+      0
+    }
+  ));
+  cat.systems.push_back(FurnaceGUISysDef(
+    "NES", {
+      DIV_SYSTEM_NES, 64, 0, 0,
+      0
+    }
+  ));
+  cat.systems.push_back(FurnaceGUISysDef(
+    "NES with Konami VRC7", {
+      DIV_SYSTEM_NES, 64, 0, 0,
+      DIV_SYSTEM_VRC7, 64, 0, 0,
+      0
+    }
+  ));
+  cat.systems.push_back(FurnaceGUISysDef(
+    "Commodore 64 (6581 SID)", {
+      DIV_SYSTEM_C64_6581, 64, 0, 1,
+      0
+    }
+  ));
+  cat.systems.push_back(FurnaceGUISysDef(
+    "Commodore 64 (8580 SID)", {
+      DIV_SYSTEM_C64_8580, 64, 0, 1,
+      0
+    }
+  ));
+  cat.systems.push_back(FurnaceGUISysDef(
+    "Arcade (YM2151 and SegaPCM)", {
+      DIV_SYSTEM_YM2151, 64, 0, 0,
+      DIV_SYSTEM_SEGAPCM_COMPAT, 64, 0, 0,
+      0
+    }
+  ));
+  cat.systems.push_back(FurnaceGUISysDef(
+    "Neo Geo CD", {
+      DIV_SYSTEM_YM2610, 64, 0, 0,
+      0
+    }
+  ));
+  cat.systems.push_back(FurnaceGUISysDef(
+    "Neo Geo CD (extended channel 2)", {
+      DIV_SYSTEM_YM2610_EXT, 64, 0, 0,
+      0
+    }
+  ));
+  sysCategories.push_back(cat);
+
   memset(willExport,1,32*sizeof(bool));
 
   peak[0]=0;
@@ -5741,4 +6664,5 @@ FurnaceGUI::FurnaceGUI():
 
   memset(patChanX,0,sizeof(float)*(DIV_MAX_CHANS+1));
   memset(patChanSlideY,0,sizeof(float)*(DIV_MAX_CHANS+1));
+  memset(lastIns,-1,sizeof(int)*DIV_MAX_CHANS);
 }

@@ -70,15 +70,13 @@ class DivPlatformGenesis: public DivDispatch {
     };
     std::queue<QueuedWrite> writes;
     ym3438_t fm;
-    DivPlatformSMS psg;
-    int psgClocks;
-    int psgOut;
     int delay;
     unsigned char lastBusy;
 
     ymfm::ym2612* fm_ymfm;
     ymfm::ym2612::output_data out_ymfm;
     DivYM2612Interface iface;
+    unsigned char regPool[512];
   
     bool dacMode;
     int dacPeriod;
@@ -106,6 +104,8 @@ class DivPlatformGenesis: public DivDispatch {
     void acquire(short* bufL, short* bufR, size_t start, size_t len);
     int dispatch(DivCommand c);
     void* getChanState(int chan);
+    unsigned char* getRegisterPool();
+    int getRegisterPoolSize();
     void reset();
     void forceIns();
     void tick();

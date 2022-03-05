@@ -147,10 +147,6 @@ int DivPlatformYM2610Ext::dispatch(DivCommand c) {
       if (return2) return 2;
       break;
     }
-    case DIV_CMD_SAMPLE_MODE: {
-      // ignored on extended channel 2 mode.
-      break;
-    }
     case DIV_CMD_LEGATO: {
       opChan[ch].baseFreq=NOTE_FREQUENCY(c.value);
       opChan[ch].freqChanged=true;

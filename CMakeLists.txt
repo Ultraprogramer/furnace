@@ -18,9 +18,11 @@ set(CMAKE_PROJECT_VERSION_PATCH 7)
 
 if (ANDROID)
   set(BUILD_GUI_DEFAULT OFF)
+  set(USE_RTMIDI_DEFAULT OFF)
   set(SYSTEM_SDL2_DEFAULT ON)
 else()
   set(BUILD_GUI_DEFAULT ON)
+  set(USE_RTMIDI_DEFAULT ON)
   set(SYSTEM_SDL2_DEFAULT OFF)
 endif()
 
@@ -33,6 +35,7 @@ else()
 endif()
 
 option(BUILD_GUI "Build the tracker (disable to build only a headless player)" ${BUILD_GUI_DEFAULT})
+option(USE_RTMIDI "Build with MIDI support using RtMidi. Currently unfinished." ${USE_RTMIDI_DEFAULT})
 option(WITH_JACK "Whether to build with JACK support. Auto-detects if JACK is available" ${WITH_JACK_DEFAULT})
 option(SYSTEM_FMT "Use a system-installed version of fmt instead of the vendored one" OFF)
 option(SYSTEM_LIBSNDFILE "Use a system-installed version of libsndfile instead of the vendored one" OFF)
@@ -105,20 +108,22 @@ else()
   message(STATUS "Using vendored libsndfile")
 endif()
 
-if (SYSTEM_RTMIDI)
-  find_package(PkgConfig REQUIRED)
-  pkg_check_modules(RTMIDI REQUIRED rtmidi)
-  list(APPEND DEPENDENCIES_INCLUDE_DIRS ${RTMIDI_INCLUDE_DIRS})
-  list(APPEND DEPENDENCIES_COMPILE_OPTIONS ${RTMIDI_CFLAGS_OTHER})
-  list(APPEND DEPENDENCIES_LIBRARIES ${RTMIDI_LIBRARIES})
-  list(APPEND DEPENDENCIES_LIBRARY_DIRS ${RTMIDI_LIBRARY_DIRS})
-  list(APPEND DEPENDENCIES_LINK_OPTIONS ${RTMIDI_LDFLAGS_OTHER})
-  list(APPEND DEPENDENCIES_LEGACY_LDFLAGS ${RTMIDI_LDFLAGS})
-  message(STATUS "Using system-installed RtMidi")
-else()
-  add_subdirectory(extern/rtmidi EXCLUDE_FROM_ALL)
-  list(APPEND DEPENDENCIES_LIBRARIES rtmidi)
-  message(STATUS "Using vendored RtMidi")
+if (USE_RTMIDI)
+  if (SYSTEM_RTMIDI)
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(RTMIDI REQUIRED rtmidi)
+    list(APPEND DEPENDENCIES_INCLUDE_DIRS ${RTMIDI_INCLUDE_DIRS})
+    list(APPEND DEPENDENCIES_COMPILE_OPTIONS ${RTMIDI_CFLAGS_OTHER})
+    list(APPEND DEPENDENCIES_LIBRARIES ${RTMIDI_LIBRARIES})
+    list(APPEND DEPENDENCIES_LIBRARY_DIRS ${RTMIDI_LIBRARY_DIRS})
+    list(APPEND DEPENDENCIES_LINK_OPTIONS ${RTMIDI_LDFLAGS_OTHER})
+    list(APPEND DEPENDENCIES_LEGACY_LDFLAGS ${RTMIDI_LDFLAGS})
+    message(STATUS "Using system-installed RtMidi")
+  else()
+    add_subdirectory(extern/rtmidi EXCLUDE_FROM_ALL)
+    list(APPEND DEPENDENCIES_LIBRARIES rtmidi)
+    message(STATUS "Using vendored RtMidi")
+  endif()
 endif()
 
 if (SYSTEM_ZLIB)
@@ -145,39 +150,20 @@ endif()
 
 if (SYSTEM_SDL2)
   if (PKG_CONFIG_FOUND)
-    pkg_check_modules(SDL sdl>=${SYSTEM_SDL_MIN_VER})
-    if (SDL_FOUND)
-      list(APPEND DEPENDENCIES_INCLUDE_DIRS ${SDL_INCLUDE_DIRS})
-      list(APPEND DEPENDENCIES_COMPILE_OPTIONS ${SDL_CFLAGS_OTHER})
-      list(APPEND DEPENDENCIES_LIBRARIES ${SDL_LIBRARIES})
-      list(APPEND DEPENDENCIES_LIBRARY_DIRS ${SDL_LIBRARY_DIRS})
-      list(APPEND DEPENDENCIES_LINK_OPTIONS ${SDL_LDFLAGS_OTHER})
-      list(APPEND DEPENDENCIES_LEGACY_LDFLAGS ${SDL_LDFLAGS})
+    pkg_check_modules(SDL2 sdl2>=${SYSTEM_SDL_MIN_VER})
+    if (SDL2_FOUND)
+      list(APPEND DEPENDENCIES_INCLUDE_DIRS ${SDL2_INCLUDE_DIRS})
+      list(APPEND DEPENDENCIES_COMPILE_OPTIONS ${SDL2_CFLAGS_OTHER})
+      list(APPEND DEPENDENCIES_LIBRARIES ${SDL2_LIBRARIES})
+      list(APPEND DEPENDENCIES_LIBRARY_DIRS ${SDL2_LIBRARY_DIRS})
+      list(APPEND DEPENDENCIES_LINK_OPTIONS ${SDL2_LDFLAGS_OTHER})
+      list(APPEND DEPENDENCIES_LEGACY_LDFLAGS ${SDL2_LDFLAGS})
     endif()
   endif()
-  if (NOT SDL_FOUND)
-    find_package(SDL ${SYSTEM_SDL_MIN_VER})
-    if (SDL_FOUND)
-      list(APPEND DEPENDENCIES_INCLUDE_DIRS ${SDL_INCLUDE_DIR})
-      list(APPEND DEPENDENCIES_LIBRARIES ${SDL_LIBRARY})
-    else()
-      if (PKG_CONFIG_FOUND)
-        pkg_check_modules(SDL2 sdl2>=${SYSTEM_SDL_MIN_VER})
-        if (SDL2_FOUND)
-          list(APPEND DEPENDENCIES_INCLUDE_DIRS ${SDL2_INCLUDE_DIRS})
-          list(APPEND DEPENDENCIES_COMPILE_OPTIONS ${SDL2_CFLAGS_OTHER})
-          list(APPEND DEPENDENCIES_LIBRARIES ${SDL2_LIBRARIES})
-          list(APPEND DEPENDENCIES_LIBRARY_DIRS ${SDL2_LIBRARY_DIRS})
-          list(APPEND DEPENDENCIES_LINK_OPTIONS ${SDL2_LDFLAGS_OTHER})
-          list(APPEND DEPENDENCIES_LEGACY_LDFLAGS ${SDL2_LDFLAGS})
-        endif()
-      endif()
-      if (NOT SDL2_FOUND)
-        find_package(SDL2 ${SYSTEM_SDL_MIN_VER} REQUIRED)
-        list(APPEND DEPENDENCIES_INCLUDE_DIRS ${SDL2_INCLUDE_DIR})
-        list(APPEND DEPENDENCIES_LIBRARIES ${SDL2_LIBRARY})
-      endif()
-    endif()
+  if (NOT SDL2_FOUND)
+    find_package(SDL2 ${SYSTEM_SDL_MIN_VER} REQUIRED)
+    list(APPEND DEPENDENCIES_INCLUDE_DIRS ${SDL2_INCLUDE_DIR})
+    list(APPEND DEPENDENCIES_LIBRARIES ${SDL2_LIBRARY})
   endif()
   message(STATUS "Using system-installed SDL2")
 else()
@@ -210,6 +196,13 @@ else()
   message(STATUS "Building without JACK support")
 endif()
 
+if (USE_RTMIDI)
+  list(APPEND AUDIO_SOURCES src/audio/rtmidi.cpp)
+  message(STATUS "Building with RtMidi")
+else()
+  message(STATUS "Building without RtMidi")
+endif()
+
 set(ENGINE_SOURCES
 src/log.cpp
 src/fileutils.cpp
@@ -224,8 +217,15 @@ extern/SAASound/src/SAANoise.cpp
 extern/SAASound/src/SAASndC.cpp
 extern/SAASound/src/SAASound.cpp
 
+extern/adpcm/bs_codec.c
+extern/adpcm/oki_codec.c
+extern/adpcm/yma_codec.c
+extern/adpcm/ymb_codec.c
+extern/adpcm/ymz_codec.c
+
 extern/Nuked-OPN2/ym3438.c
 extern/opm/opm.c
+extern/Nuked-OPLL/opll.c
 src/engine/platform/sound/sn76496.cpp
 src/engine/platform/sound/ay8910.cpp
 src/engine/platform/sound/saa1099.cpp
@@ -260,6 +260,10 @@ src/engine/platform/sound/ymfm/ymfm_opn.cpp
 src/engine/platform/sound/ymfm/ymfm_opz.cpp
 src/engine/platform/sound/ymfm/ymfm_ssg.cpp
 
+src/engine/platform/sound/lynx/Mikey.cpp
+
+src/engine/platform/sound/qsound.c
+
 src/engine/platform/ym2610Interface.cpp
 
 src/engine/blip_buf.c
@@ -282,6 +286,7 @@ src/engine/platform/abstract.cpp
 src/engine/platform/genesis.cpp
 src/engine/platform/genesisext.cpp
 src/engine/platform/sms.cpp
+src/engine/platform/opll.cpp
 src/engine/platform/gb.cpp
 src/engine/platform/pce.cpp
 src/engine/platform/nes.cpp
@@ -289,12 +294,18 @@ src/engine/platform/c64.cpp
 src/engine/platform/arcade.cpp
 src/engine/platform/ym2610.cpp
 src/engine/platform/ym2610ext.cpp
+src/engine/platform/ym2610b.cpp
+src/engine/platform/ym2610bext.cpp
 src/engine/platform/ay.cpp
 src/engine/platform/ay8930.cpp
 src/engine/platform/tia.cpp
 src/engine/platform/saa.cpp
 src/engine/platform/amiga.cpp
+src/engine/platform/pcspkr.cpp
+src/engine/platform/segapcm.cpp
+src/engine/platform/qsound.cpp
 src/engine/platform/dummy.cpp
+src/engine/platform/lynx.cpp
 )
 
 if (WIN32)

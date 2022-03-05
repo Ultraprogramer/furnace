@@ -4,7 +4,11 @@ while Furnace works directly with the .dmf format, I had to create a new format 
 
 this document has the goal of detailing the format.
 
+**notice:** GitHub's Markdown formatter may break on this file as it doesn't seem to treat tables correctly.
+
 # information
+
+files may be zlib-compressed, but Furnace accepts uncompressed files as well.
 
 all numbers are little-endian.
 
@@ -25,6 +29,17 @@ furthermore, an `or reserved` indicates this field is always present, but is res
 
 the format versions are:
 
+- 63: Furnace dev63
+- 62: Furnace dev62
+- 61: Furnace dev61
+- 60: Furnace dev60
+- 59: Furnace dev59
+- 58: Furnace dev58
+- 57: Furnace dev57
+
+- 54: Furnace 0.5.8
+- 53: Furnace 0.5.7
+- 52: Furnace 0.5.7pre4
 - 51: Furnace 0.5.7pre3
 - 50: Furnace 0.5.7pre2
 - 49: Furnace 0.5.7pre1
@@ -63,6 +78,7 @@ the format versions are:
 
 the header is 32 bytes long.
 
+```
 size | description
 -----|------------------------------------
  16  | "-Furnace module-" format magic
@@ -70,9 +86,11 @@ size | description
   2  | reserved
   4  | song info pointer
   8  | reserved
+```
 
 # song info
 
+```
 size | description
 -----|------------------------------------
   4  | "INFO" block ID
@@ -96,19 +114,20 @@ size | description
      | - possible soundchips:
      |   - 0x00: end of list
      |   - 0x01: YMU759 - 17 channels
-     |   - 0x02: Genesis - 10 channels
+     |   - 0x02: Genesis - 10 channels (compound!)
      |   - 0x03: SMS (SN76489) - 4 channels
      |   - 0x04: Game Boy - 4 channels
      |   - 0x05: PC Engine - 6 channels
      |   - 0x06: NES - 5 channels
      |   - 0x07: C64 (8580) - 3 channels
-     |   - 0x08: Arcade (YM2151) - 13 channels
-     |   - 0x09: Neo Geo (YM2610) - 13 channels
+     |   - 0x08: Arcade (YM2151+SegaPCM) - 13 channels (compound!)
+     |   - 0x09: Neo Geo CD (YM2610) - 13 channels
      |   - bit 6 enables alternate mode:
      |     - 0x42: Genesis extended - 13 channels
-     |     - 0x43: SMS (SN76489) + OPLL (YM2413) - 13 channels
+     |     - 0x43: SMS (SN76489) + OPLL (YM2413) - 13 channels (compound!)
+     |     - 0x46: NES + VRC7 - 11 channels (compound!)
      |     - 0x47: C64 (6581) - 3 channels
-     |     - 0x49: Neo Geo extended - 16 channels
+     |     - 0x49: Neo Geo CD extended - 16 channels
      |   - bit 7 for non-DefleMask chips:
      |     - 0x80: AY-3-8910 - 3 channels
      |     - 0x81: Amiga - 4 channels
@@ -147,16 +166,23 @@ size | description
      |     - 0xa2: OPL drums (YM3526) - 11 channels
      |     - 0xa3: OPL2 drums (YM3812) - 11 channels
      |     - 0xa4: OPL3 drums (YMF262) - 20 channels
-     |     - 0xa5: OPL3 4-op (YMF262) - 12 channels
-     |     - 0xa6: OPL3 4-op + drums (YMF262) - 14 channels
+     |     - 0xa5: Neo Geo (YM2610) - 14 channels
+     |     - 0xa6: Neo Geo extended (YM2610) - 17 channels
      |     - 0xa7: OPLL drums (YM2413) - 11 channels
      |     - 0xa8: Atari Lynx - 4 channels
-     |     - 0xe0: QSound - 16 channels
+     |     - 0xa9: SegaPCM (for Deflemask Compatibility) - 5 channels
+     |     - 0xaa: MSM6295 - 4 channels
+     |     - 0xab: MSM6258 - 1 channel
+     |     - 0xac: Commander X16 (VERA) - 17 channels
+     |     - 0xde: YM2610B extended - 19 channels
+     |     - 0xe0: QSound - 19 channels
+     | - (compound!) means that the system is composed of two or more chips,
+     |   and has to be flattened.
  32  | sound chip volumes
      | - signed char, 64=1.0, 127=~2.0
  32  | sound chip panning
      | - signed char, -128=left, 127=right
- 128 | sound chip parameters (TODO)
+ 128 | sound chip parameters
  STR | song name
  STR | song author
   4f | A-4 tuning
@@ -174,15 +200,17 @@ size | description
   1  | wack algorithm macro (>=47) or reserved
   1  | broken shortcut slides (>=49) or reserved
   1  | ignore duplicate slides (>=50) or reserved
-  6  | reserved
+  1  | stop portamento on note off (>=62) or reserved
+  1  | continuous vibrato (>=62) or reserved
+  4  | reserved
  4?? | pointers to instruments
  4?? | pointers to wavetables
  4?? | pointers to samples
  4?? | pointers to patterns
  ??? | orders
-     | - a table of shorts
+     | - a table of bytes
      | - size=channels*ordLen
-     | - read orders than channels
+     | - read orders then channels
  ??? | effect columns
      | - size=channels
  1?? | channel hide status
@@ -194,9 +222,13 @@ size | description
  S?? | channel short names
      | - same as above
  STR | song comment
+  4f | master volume, 1.0f=100% (>=59)
+     | this is 2.0f for modules before 59
+```
 
 # instrument
 
+```
 size | description
 -----|------------------------------------
   4  | "INST" block ID
@@ -216,7 +248,11 @@ size | description
   1  | fms
   1  | ams
   1  | operator count (always 4)
-  3  | reserved
+  1  | OPLL preset (>=60) or reserved
+     | - 0: custom
+     | - 1-15: pre-defined patches
+     | - 16: drums (compatibility only!)
+  2  | reserved
  --- | **FM operator data** × 4
   1  | am
   1  | ar
@@ -400,9 +436,59 @@ size | description
   4  | DT macro release
   4  | D2R macro release
   4  | SSG-EG macro release
+ --- | **extended op macro headers** × 4 (>=61)
+  4  | DAM macro length
+  4  | DVB macro length
+  4  | EGT macro length
+  4  | KSL macro length
+  4  | SUS macro length
+  4  | VIB macro length
+  4  | WS macro length
+  4  | KSR macro length
+  4  | DAM macro loop
+  4  | DVB macro loop
+  4  | EGT macro loop
+  4  | KSL macro loop
+  4  | SUS macro loop
+  4  | VIB macro loop
+  4  | WS macro loop
+  4  | KSR macro loop
+  4  | DAM macro release
+  4  | DVB macro release
+  4  | EGT macro release
+  4  | KSL macro release
+  4  | SUS macro release
+  4  | VIB macro release
+  4  | WS macro release
+  4  | KSR macro release
+  1  | DAM macro open
+  1  | DVB macro open
+  1  | EGT macro open
+  1  | KSL macro open
+  1  | SUS macro open
+  1  | VIB macro open
+  1  | WS macro open
+  1  | KSR macro open
+ --- | **extended op macros** × 4 (>=61)
+ 1?? | DAM macro
+ 1?? | DVB macro
+ 1?? | EGT macro
+ 1?? | KSL macro
+ 1?? | SUS macro
+ 1?? | VIB macro
+ 1?? | WS macro
+ 1?? | KSR macro
+ --- | **OPL drums mode data** (>=63)
+  1  | fixed frequency mode
+  1  | reserved
+  2  | kick frequency
+  2  | snare/hi-hat frequency
+  2  | tom/top frequency
+```
 
 # wavetable
 
+```
 size | description
 -----|------------------------------------
   4  | "WAVE" block ID
@@ -412,9 +498,11 @@ size | description
   4  | wavetable min
   4  | wavetable max
  4?? | wavetable data
+```
 
 # sample
 
+```
 size | description
 -----|------------------------------------
   4  | "SMPL" block ID
@@ -422,17 +510,31 @@ size | description
  STR | sample name
   4  | length
   4  | rate
-  2  | volume
-  2  | pitch
+  2  | volume (<58) or reserved
+  2  | pitch (<58) or reserved
   1  | depth
+     | - 0: ZX Spectrum overlay drum (1-bit)
+     | - 1: 1-bit NES DPCM (1-bit)
+     | - 4: QSound ADPCM
+     | - 5: ADPCM-A
+     | - 6: ADPCM-B
+     | - 7: X68000 ADPCM
+     | - 8: 8-bit PCM
+     | - 9: BRR (SNES)
+     | - 10: VOX
+     | - 16: 16-bit PCM
   1  | reserved
   2  | C-4 rate (>=32) or reserved
   4  | loop point (>=19) or reserved
      | - -1 means no loop
- 2?? | sample data (always 16-bit)
+ ??? | sample data
+     | - version<58 size is length*2
+     | - version>=58 size is length
+```
 
 # pattern
 
+```
 size | description
 -----|------------------------------------
   4  | "PATR" block ID
@@ -449,11 +551,13 @@ size | description
      |   - volume
      |   - effect and effect data...
  STR | pattern name (>=51)
+```
 
 # the Furnace instrument format (.fui)
 
 the instrument format is pretty similar to the file format, but it also stores wavetables and samples used by the instrument.
 
+```
 size | description
 -----|------------------------------------
  16  | "-Furnace instr.-" format magic
@@ -465,6 +569,7 @@ size | description
   4  | reserved
  4?? | pointers to wavetables
  4?? | pointers to samples
+```
 
 instrument data follows.
 
@@ -472,10 +577,12 @@ instrument data follows.
 
 similar to the instrument format...
 
+```
 size | description
 -----|------------------------------------
  16  | "-Furnace waveta-" format magic
   2  | format version
   2  | reserved
+```
 
 wavetable data follows.

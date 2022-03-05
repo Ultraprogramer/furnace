@@ -22,6 +22,7 @@
 #include "platform/genesis.h"
 #include "platform/genesisext.h"
 #include "platform/sms.h"
+#include "platform/opll.h"
 #include "platform/gb.h"
 #include "platform/pce.h"
 #include "platform/nes.h"
@@ -29,12 +30,18 @@
 #include "platform/arcade.h"
 #include "platform/ym2610.h"
 #include "platform/ym2610ext.h"
+#include "platform/ym2610b.h"
+#include "platform/ym2610bext.h"
 #include "platform/ay.h"
 #include "platform/ay8930.h"
 #include "platform/tia.h"
 #include "platform/saa.h"
 #include "platform/amiga.h"
+#include "platform/pcspkr.h"
+#include "platform/segapcm.h"
+#include "platform/qsound.h"
 #include "platform/dummy.h"
+#include "platform/lynx.h"
 #include "../ta-log.h"
 #include "song.h"
 
@@ -138,12 +145,11 @@ void DivDispatchContainer::init(DivSystem sys, DivEngine* eng, int chanCount, do
   bbInLen=32768;
 
   switch (sys) {
-    case DIV_SYSTEM_GENESIS:
     case DIV_SYSTEM_YM2612:
       dispatch=new DivPlatformGenesis;
       ((DivPlatformGenesis*)dispatch)->setYMFM(eng->getConfInt("ym2612Core",0));
       break;
-    case DIV_SYSTEM_GENESIS_EXT:
+    case DIV_SYSTEM_YM2612_EXT:
       dispatch=new DivPlatformGenesisExt;
       ((DivPlatformGenesisExt*)dispatch)->setYMFM(eng->getConfInt("ym2612Core",0));
       break;
@@ -167,7 +173,6 @@ void DivDispatchContainer::init(DivSystem sys, DivEngine* eng, int chanCount, do
       dispatch=new DivPlatformC64;
       ((DivPlatformC64*)dispatch)->setChipModel(false);
       break;
-    case DIV_SYSTEM_ARCADE:
     case DIV_SYSTEM_YM2151:
       dispatch=new DivPlatformArcade;
       ((DivPlatformArcade*)dispatch)->setYMFM(eng->getConfInt("arcadeCore",0)==0);
@@ -179,6 +184,12 @@ void DivDispatchContainer::init(DivSystem sys, DivEngine* eng, int chanCount, do
     case DIV_SYSTEM_YM2610_EXT:
     case DIV_SYSTEM_YM2610_FULL_EXT:
       dispatch=new DivPlatformYM2610Ext;
+      break;
+    case DIV_SYSTEM_YM2610B:
+      dispatch=new DivPlatformYM2610B;
+      break;
+    case DIV_SYSTEM_YM2610B_EXT:
+      dispatch=new DivPlatformYM2610BExt;
       break;
     case DIV_SYSTEM_AMIGA:
       dispatch=new DivPlatformAmiga;
@@ -192,6 +203,13 @@ void DivDispatchContainer::init(DivSystem sys, DivEngine* eng, int chanCount, do
     case DIV_SYSTEM_TIA:
       dispatch=new DivPlatformTIA;
       break;
+    case DIV_SYSTEM_OPLL:
+    case DIV_SYSTEM_OPLL_DRUMS:
+    case DIV_SYSTEM_VRC7:
+      dispatch=new DivPlatformOPLL;
+      ((DivPlatformOPLL*)dispatch)->setVRC7(sys==DIV_SYSTEM_VRC7);
+      ((DivPlatformOPLL*)dispatch)->setProperDrums(sys==DIV_SYSTEM_OPLL_DRUMS);
+      break;
     case DIV_SYSTEM_SAA1099: {
       int saaCore=eng->getConfInt("saaCore",0);
       if (saaCore<0 || saaCore>2) saaCore=0;
@@ -199,6 +217,19 @@ void DivDispatchContainer::init(DivSystem sys, DivEngine* eng, int chanCount, do
       ((DivPlatformSAA1099*)dispatch)->setCore((DivSAACores)saaCore);
       break;
     }
+    case DIV_SYSTEM_PCSPKR:
+      dispatch=new DivPlatformPCSpeaker;
+      break;
+    case DIV_SYSTEM_LYNX:
+      dispatch=new DivPlatformLynx;
+      break;
+    case DIV_SYSTEM_QSOUND:
+      dispatch=new DivPlatformQSound;
+      break;
+    case DIV_SYSTEM_SEGAPCM:
+    case DIV_SYSTEM_SEGAPCM_COMPAT:
+      dispatch=new DivPlatformSegaPCM;
+      break;
     default:
       logW("this system is not supported yet! using dummy platform.\n");
       dispatch=new DivPlatformDummy;

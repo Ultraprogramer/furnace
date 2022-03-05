@@ -34,16 +34,17 @@
 enum DivSystem {
   DIV_SYSTEM_NULL=0,
   DIV_SYSTEM_YMU759,
-  DIV_SYSTEM_GENESIS,
-  DIV_SYSTEM_GENESIS_EXT,
+  DIV_SYSTEM_GENESIS, // ** COMPOUND SYSTEM - DO NOT USE! **
+  DIV_SYSTEM_GENESIS_EXT, // ** COMPOUND SYSTEM - DO NOT USE! **
   DIV_SYSTEM_SMS,
-  DIV_SYSTEM_SMS_OPLL,
+  DIV_SYSTEM_SMS_OPLL, // ** COMPOUND SYSTEM - DO NOT USE! **
   DIV_SYSTEM_GB,
   DIV_SYSTEM_PCE,
   DIV_SYSTEM_NES,
+  DIV_SYSTEM_NES_VRC7, // ** COMPOUND SYSTEM - DO NOT USE! **
   DIV_SYSTEM_C64_6581,
   DIV_SYSTEM_C64_8580,
-  DIV_SYSTEM_ARCADE,
+  DIV_SYSTEM_ARCADE, // ** COMPOUND SYSTEM - DO NOT USE! **
   DIV_SYSTEM_YM2610,
   DIV_SYSTEM_YM2610_EXT,
   
@@ -87,6 +88,10 @@ enum DivSystem {
   DIV_SYSTEM_YM2610_FULL,
   DIV_SYSTEM_YM2610_FULL_EXT,
   DIV_SYSTEM_OPLL_DRUMS,
+  DIV_SYSTEM_LYNX,
+  DIV_SYSTEM_QSOUND,
+  DIV_SYSTEM_YM2610B_EXT,
+  DIV_SYSTEM_SEGAPCM_COMPAT
 };
 
 struct DivSong {
@@ -210,6 +215,30 @@ struct DivSong {
   //     - 1: Amiga 1200
   //   - bit 8-14: stereo separation
   //     - 0 is 0% while 127 is 100%
+  // - PC Speaker:
+  //   - bit 0-1: speaker type
+  //     - 0: unfiltered
+  //     - 1: cone
+  //     - 2: piezo
+  //     - 3: real (TODO)
+  // - QSound:
+  //   - bit 12-20: echo feedback
+  //     - Valid values are 0-255
+  //   - bit 0-11: echo delay length
+  //     - Valid values are 0-2725
+  //     - 0 is max length, 2725 is min length
+  // - OPLL:
+  //   - bit 0-3: clock rate
+  //     - 0: NTSC (3.58MHz)
+  //     - 1: PAL (3.55MHz)
+  //     - 2: Other (4MHz)
+  //     - 3: half NTSC (1.79MHz)
+  //   - bit 4-7: patch set
+  //     - 0: YM2413
+  //     - 1: YMF281
+  //     - 2: YM2423
+  //     - 3: VRC7
+  //     - 4: custom (TODO)
   unsigned int systemFlags[32];
 
   // song information
@@ -231,6 +260,7 @@ struct DivSong {
   bool pal;
   bool customTempo;
   int hz, patLen, ordersLen, insLen, waveLen, sampleLen;
+  float masterVol;
   float tuning;
 
   // compatibility flags
@@ -252,6 +282,8 @@ struct DivSong {
   bool algMacroBehavior;
   bool brokenShortcutSlides;
   bool ignoreDuplicateSlides;
+  bool stopPortaOnNoteOff;
+  bool continuousVibrato;
 
   DivOrders orders;
   std::vector<DivInstrument*> ins;
@@ -264,13 +296,14 @@ struct DivSong {
 
   DivInstrument nullIns;
   DivWavetable nullWave;
+  DivSample nullSample;
 
   void unload();
 
   DivSong():
     version(0),
     isDMF(false),
-    systemLen(1),
+    systemLen(2),
     name(""),
     author(""),
     carrier(""),
@@ -298,6 +331,7 @@ struct DivSong {
     insLen(0),
     waveLen(0),
     sampleLen(0),
+    masterVol(1.0f),
     tuning(440.0f),
     limitSlides(false),
     linearPitch(true),
@@ -312,7 +346,9 @@ struct DivSong {
     arpNonPorta(false),
     algMacroBehavior(false),
     brokenShortcutSlides(false),
-    ignoreDuplicateSlides(false) {
+    ignoreDuplicateSlides(false),
+    stopPortaOnNoteOff(false),
+    continuousVibrato(false) {
     for (int i=0; i<32; i++) {
       system[i]=DIV_SYSTEM_NULL;
       systemVol[i]=64;
@@ -323,7 +359,8 @@ struct DivSong {
       chanShow[i]=true;
       chanCollapse[i]=false;
     }
-    system[0]=DIV_SYSTEM_GENESIS;
+    system[0]=DIV_SYSTEM_YM2612;
+    system[1]=DIV_SYSTEM_SMS;
   }
 };
 
