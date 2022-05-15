@@ -22,10 +22,18 @@
 void DivDispatch::acquire(short* bufL, short* bufR, size_t start, size_t len) {
 }
 
-void DivDispatch::tick() {
+void DivDispatch::tick(bool sysTick) {
 }
 
 void* DivDispatch::getChanState(int chan) {
+  return NULL;
+}
+
+DivMacroInt* DivDispatch::getChanMacroInt(int chan) {
+  return NULL;
+}
+
+DivDispatchOscBuffer* DivDispatch::getOscBuffer(int chan) {
   return NULL;
 }
 
@@ -74,6 +82,14 @@ int DivDispatch::getPortaFloor(int ch) {
   return 0x00;
 }
 
+float DivDispatch::getPostAmp() {
+  return 1.0f;
+}
+
+bool DivDispatch::getDCOffRequired() {
+  return false;
+}
+
 const char* DivDispatch::getEffectName(unsigned char effect) {
   return NULL;
 }
@@ -94,6 +110,10 @@ void DivDispatch::notifyWaveChange(int ins) {
 }
 
 void DivDispatch::notifyInsDeletion(void* ins) {
+
+}
+
+void DivDispatch::notifyPlaybackStop() {
 
 }
 
@@ -119,6 +139,22 @@ void DivDispatch::poke(std::vector<DivRegWrite>& wlist) {
 
 const char** DivDispatch::getRegisterSheet() {
   return NULL;
+}
+
+const void* DivDispatch::getSampleMem(int index) {
+  return NULL;
+}
+
+size_t DivDispatch::getSampleMemCapacity(int index) {
+  return 0;
+}
+
+size_t DivDispatch::getSampleMemUsage(int index) {
+  return 0;
+}
+
+void DivDispatch::renderSamples() {
+  
 }
 
 int DivDispatch::init(DivEngine* p, int channels, int sugRate, unsigned int flags) {

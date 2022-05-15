@@ -37,33 +37,35 @@ void FurnaceGUI::drawOrders() {
     ImGui::SetColumnWidth(-1,regionX-24.0f*dpiScale);
     int displayChans=0;
     for (int i=0; i<e->getTotalChannelCount(); i++) {
-      if (e->song.chanShow[i]) displayChans++;
+      if (e->curSubSong->chanShow[i]) displayChans++;
     }
-    if (ImGui::BeginTable("OrdersTable",1+displayChans,ImGuiTableFlags_SizingStretchSame|ImGuiTableFlags_ScrollX|ImGuiTableFlags_ScrollY)) {
+    ImGui::PushFont(patFont);
+    bool tooSmall=((displayChans+1)>((ImGui::GetContentRegionAvail().x)/(ImGui::CalcTextSize("AA").x+2.0*ImGui::GetStyle().ItemInnerSpacing.x)));
+    ImGui::PopFont();
+    if (ImGui::BeginTable("OrdersTable",1+displayChans,(tooSmall?ImGuiTableFlags_SizingFixedFit:ImGuiTableFlags_SizingStretchSame)|ImGuiTableFlags_ScrollX|ImGuiTableFlags_ScrollY)) {
       ImGui::PushFont(patFont);
       ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,prevSpacing);
       ImGui::TableSetupScrollFreeze(1,1);
       float lineHeight=(ImGui::GetTextLineHeight()+4*dpiScale);
-      int curOrder=e->getOrder();
       if (e->isPlaying()) {
         if (followOrders) {
-          ImGui::SetScrollY((curOrder+1)*lineHeight-(ImGui::GetContentRegionAvail().y/2));
+          ImGui::SetScrollY((e->getOrder()+1)*lineHeight-(ImGui::GetContentRegionAvail().y/2));
         }
       }
       ImGui::TableNextRow(0,lineHeight);
       ImGui::TableNextColumn();
-      ImGui::PushStyleColor(ImGuiCol_Text,uiColors[GUI_COLOR_PATTERN_ROW_INDEX]);
+      ImGui::PushStyleColor(ImGuiCol_Text,uiColors[GUI_COLOR_ORDER_ROW_INDEX]);
       for (int i=0; i<e->getTotalChannelCount(); i++) {
-        if (!e->song.chanShow[i]) continue;
+        if (!e->curSubSong->chanShow[i]) continue;
         ImGui::TableNextColumn();
         ImGui::Text("%s",e->getChannelShortName(i));
       }
       ImGui::PopStyleColor();
-      for (int i=0; i<e->song.ordersLen; i++) {
+      for (int i=0; i<e->curSubSong->ordersLen; i++) {
         ImGui::TableNextRow(0,lineHeight);
-        if (oldOrder1==i) ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0,0x40ffffff);
+        if (oldOrder1==i) ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0,ImGui::GetColorU32(uiColors[GUI_COLOR_ORDER_ACTIVE]));
         ImGui::TableNextColumn();
-        ImGui::PushStyleColor(ImGuiCol_Text,uiColors[GUI_COLOR_PATTERN_ROW_INDEX]);
+        ImGui::PushStyleColor(ImGuiCol_Text,uiColors[GUI_COLOR_ORDER_ROW_INDEX]);
         bool highlightLoop=(i>=loopOrder && i<=loopEnd);
         if (highlightLoop) ImGui::TableSetBgColor(ImGuiTableBgTarget_CellBg,ImGui::GetColorU32(uiColors[GUI_COLOR_SONG_LOOP]));
         if (settings.orderRowsBase==1) {
@@ -72,7 +74,7 @@ void FurnaceGUI::drawOrders() {
           snprintf(selID,4096,"%d##O_S%.2x",i,i);
         }
         if (ImGui::Selectable(selID)) {
-          e->setOrder(i);
+          setOrder(i);
           curNibble=false;
           orderCursor=-1;
 
@@ -82,25 +84,29 @@ void FurnaceGUI::drawOrders() {
         }
         ImGui::PopStyleColor();
         for (int j=0; j<e->getTotalChannelCount(); j++) {
-          if (!e->song.chanShow[j]) continue;
+          if (!e->curSubSong->chanShow[j]) continue;
           ImGui::TableNextColumn();
-          DivPattern* pat=e->song.pat[j].getPattern(e->song.orders.ord[j][i],false);
+          DivPattern* pat=e->curPat[j].getPattern(e->curOrders->ord[j][i],false);
           /*if (!pat->name.empty()) {
             snprintf(selID,4096,"%s##O_%.2x_%.2x",pat->name.c_str(),j,i);
           } else {*/
-            snprintf(selID,4096,"%.2X##O_%.2x_%.2x",e->song.orders.ord[j][i],j,i);
+            snprintf(selID,4096,"%.2X##O_%.2x_%.2x",e->curOrders->ord[j][i],j,i);
           //}
+
+          ImGui::PushStyleColor(ImGuiCol_Text,(curOrder==i || e->curOrders->ord[j][i]==e->curOrders->ord[j][curOrder])?uiColors[GUI_COLOR_ORDER_SIMILAR]:uiColors[GUI_COLOR_ORDER_INACTIVE]);
           if (ImGui::Selectable(selID,(orderEditMode!=0 && curOrder==i && orderCursor==j))) {
             if (curOrder==i) {
               if (orderEditMode==0) {
                 prepareUndo(GUI_UNDO_CHANGE_ORDER);
-                if (changeAllOrders) {
-                  for (int k=0; k<e->getTotalChannelCount(); k++) {
-                    if (e->song.orders.ord[k][i]<0x7f) e->song.orders.ord[k][i]++;
+                e->lockSave([this,i,j]() {
+                  if (changeAllOrders) {
+                    for (int k=0; k<e->getTotalChannelCount(); k++) {
+                      if (e->curOrders->ord[k][i]<0xff) e->curOrders->ord[k][i]++;
+                    }
+                  } else {
+                    if (e->curOrders->ord[j][i]<0xff) e->curOrders->ord[j][i]++;
                   }
-                } else {
-                  if (e->song.orders.ord[j][i]<0x7f) e->song.orders.ord[j][i]++;
-                }
+                });
                 e->walkSong(loopOrder,loopRow,loopEnd);
                 makeUndo(GUI_UNDO_CHANGE_ORDER);
               } else {
@@ -108,7 +114,7 @@ void FurnaceGUI::drawOrders() {
                 curNibble=false;
               }
             } else {
-              e->setOrder(i);
+              setOrder(i);
               e->walkSong(loopOrder,loopRow,loopEnd);
               if (orderEditMode!=0) {
                 orderCursor=j;
@@ -120,6 +126,7 @@ void FurnaceGUI::drawOrders() {
               handleUnimportant;
             }
           }
+          ImGui::PopStyleColor();
           if (!pat->name.empty() && ImGui::IsItemHovered()) {
             ImGui::SetTooltip("%s",pat->name.c_str());
           }
@@ -127,13 +134,15 @@ void FurnaceGUI::drawOrders() {
             if (curOrder==i) {
               if (orderEditMode==0) {
                 prepareUndo(GUI_UNDO_CHANGE_ORDER);
-                if (changeAllOrders) {
-                  for (int k=0; k<e->getTotalChannelCount(); k++) {
-                    if (e->song.orders.ord[k][i]>0) e->song.orders.ord[k][i]--;
+                e->lockSave([this,i,j]() {
+                  if (changeAllOrders) {
+                    for (int k=0; k<e->getTotalChannelCount(); k++) {
+                      if (e->curOrders->ord[k][i]>0) e->curOrders->ord[k][i]--;
+                    }
+                  } else {
+                    if (e->curOrders->ord[j][i]>0) e->curOrders->ord[j][i]--;
                   }
-                } else {
-                  if (e->song.orders.ord[j][i]>0) e->song.orders.ord[j][i]--;
-                }
+                });
                 e->walkSong(loopOrder,loopRow,loopEnd);
                 makeUndo(GUI_UNDO_CHANGE_ORDER);
               } else {
@@ -141,7 +150,7 @@ void FurnaceGUI::drawOrders() {
                 curNibble=false;
               }
             } else {
-              e->setOrder(i);
+              setOrder(i);
               e->walkSong(loopOrder,loopRow,loopEnd);
               if (orderEditMode!=0) {
                 orderCursor=j;

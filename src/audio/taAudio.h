@@ -20,18 +20,19 @@
 #ifndef _TAAUDIO_H
 #define _TAAUDIO_H
 #include "../ta-utils.h"
+#include <memory>
 #include <queue>
 #include <vector>
 
 struct SampleRateChangeEvent {
   double rate;
-  SampleRateChangeEvent(double r):
+  explicit SampleRateChangeEvent(double r):
     rate(r) {}
 };
 
 struct BufferSizeChangeEvent {
   unsigned int bufsize;
-  BufferSizeChangeEvent(unsigned int bs):
+  explicit BufferSizeChangeEvent(unsigned int bs):
     bufsize(bs) {}
 };
 
@@ -90,35 +91,27 @@ enum TAMidiMessageTypes {
 };
 
 struct TAMidiMessage {
+  double time;
   unsigned char type;
-  union {
-    struct {
-      unsigned char note, vol;
-    } note;
-    struct {
-      unsigned char which, val;
-    } control;
-    unsigned char patch;
-    unsigned char pressure;
-    struct {
-      unsigned char low, high;
-    } pitch;
-    struct {
-      unsigned int vendor;
-    } sysEx;
-    unsigned char timeCode;
-    struct {
-      unsigned char low, high;
-    } position;
-    unsigned char song;
-  } data;
-  unsigned char* sysExData;
+  unsigned char data[7];
+  std::shared_ptr<unsigned char> sysExData;
   size_t sysExLen;
 
   void submitSysEx(std::vector<unsigned char> data);
   void done();
 
+  TAMidiMessage(unsigned char t, unsigned char d0, unsigned char d1):
+    time(0.0),
+    type(t),
+    sysExData(NULL),
+    sysExLen(0) {
+    memset(&data,0,sizeof(data));
+    data[0]=d0;
+    data[1]=d1;
+  }
+
   TAMidiMessage():
+    time(0.0),
     type(0),
     sysExData(NULL),
     sysExLen(0) {
@@ -127,16 +120,34 @@ struct TAMidiMessage {
 };
 
 class TAMidiIn {
-  std::queue<TAMidiMessage> queue;
   public:
+    std::queue<TAMidiMessage> queue;
     virtual bool gather();
     bool next(TAMidiMessage& where);
+    virtual bool isDeviceOpen();
+    virtual bool openDevice(String name);
+    virtual bool closeDevice();
+    virtual std::vector<String> listDevices();
+    virtual bool init();
+    virtual bool quit();
+    TAMidiIn() {
+    }
+    virtual ~TAMidiIn();
 };
 
 class TAMidiOut {
   std::queue<TAMidiMessage> queue;
   public:
-    bool send(TAMidiMessage& what);
+    virtual bool send(const TAMidiMessage& what);
+    virtual bool isDeviceOpen();
+    virtual bool openDevice(String name);
+    virtual bool closeDevice();
+    virtual std::vector<String> listDevices();
+    virtual bool init();
+    virtual bool quit();
+    TAMidiOut() {
+    }
+    virtual ~TAMidiOut();
 };
 
 class TAAudio {
@@ -162,6 +173,8 @@ class TAAudio {
     virtual bool quit();
     virtual bool setRun(bool run);
     virtual std::vector<String> listAudioDevices();
+    bool initMidi(bool jack);
+    void quitMidi();
     virtual bool init(TAAudioDesc& request, TAAudioDesc& response);
 
     TAAudio():
@@ -171,8 +184,11 @@ class TAAudio {
       inBufs(NULL),
       outBufs(NULL),
       audioProcCallback(NULL),
+      audioProcCallbackUser(NULL),
       sampleRateChanged(NULL),
-      bufferSizeChanged(NULL) {}
+      bufferSizeChanged(NULL),
+      midiIn(NULL),
+      midiOut(NULL) {}
 
     virtual ~TAAudio();
 };

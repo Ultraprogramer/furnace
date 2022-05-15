@@ -21,9 +21,33 @@
 #include "taAudio.h"
 
 class TAMidiInRtMidi: public TAMidiIn {
-
+  RtMidiIn* port;
+  bool isOpen;
+  public:
+    bool gather();
+    bool isDeviceOpen();
+    bool openDevice(String name);
+    bool closeDevice();
+    std::vector<String> listDevices();
+    bool quit();
+    bool init();
+    TAMidiInRtMidi():
+      port(NULL),
+      isOpen(false) {}
 };
 
 class TAMidiOutRtMidi: public TAMidiOut {
-
+  RtMidiOut* port;
+  bool isOpen;
+  public:
+    bool send(const TAMidiMessage& what);
+    bool isDeviceOpen();
+    bool openDevice(String name);
+    bool closeDevice();
+    std::vector<String> listDevices();
+    bool quit();
+    bool init();
+    TAMidiOutRtMidi():
+      port(NULL),
+      isOpen(false) {}
 };

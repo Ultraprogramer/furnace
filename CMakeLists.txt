@@ -11,23 +11,23 @@ if (APPLE)
 endif()
 
 set(CMAKE_CXX_STANDARD 14)
+set(CMAKE_CXX_EXTENSIONS OFF)
 
 set(CMAKE_PROJECT_VERSION_MAJOR 0)
-set(CMAKE_PROJECT_VERSION_MINOR 5)
-set(CMAKE_PROJECT_VERSION_PATCH 7)
+set(CMAKE_PROJECT_VERSION_MINOR 6)
+set(CMAKE_PROJECT_VERSION_PATCH 0)
+
+set(BUILD_GUI_DEFAULT ON)
+set(SYSTEM_SDL2_DEFAULT OFF)
 
 if (ANDROID)
-  set(BUILD_GUI_DEFAULT OFF)
   set(USE_RTMIDI_DEFAULT OFF)
-  set(SYSTEM_SDL2_DEFAULT ON)
 else()
-  set(BUILD_GUI_DEFAULT ON)
   set(USE_RTMIDI_DEFAULT ON)
-  set(SYSTEM_SDL2_DEFAULT OFF)
 endif()
 
 find_package(PkgConfig)
-if (PKG_CONFIG_FOUND)
+if (PKG_CONFIG_FOUND AND NOT ANDROID)
   pkg_check_modules(JACK jack)
   set(WITH_JACK_DEFAULT ${JACK_FOUND})
 else()
@@ -45,7 +45,13 @@ option(SYSTEM_SDL2 "Use a system-installed version of SDL2 instead of the vendor
 option(WARNINGS_ARE_ERRORS "Whether warnings in furnace's C++ code should be treated as errors" OFF)
 
 set(DEPENDENCIES_INCLUDE_DIRS "")
+
+if (ANDROID)
+set(DEPENDENCIES_DEFINES "IS_MOBILE")
+else()
 set(DEPENDENCIES_DEFINES "")
+endif()
+
 set(DEPENDENCIES_COMPILE_OPTIONS "")
 set(DEPENDENCIES_LIBRARIES "")
 set(DEPENDENCIES_LIBRARY_DIRS "")
@@ -65,7 +71,7 @@ list(APPEND DEPENDENCIES_LIBRARIES ${CMAKE_THREAD_LIBS_INIT})
 
 if (SYSTEM_FMT)
   if (PKG_CONFIG_FOUND)
-    pkg_check_modules(FMT fmt)
+    pkg_check_modules(FMT fmt>=7.1.0)
     if (FMT_FOUND)
       list(APPEND DEPENDENCIES_INCLUDE_DIRS ${FMT_INCLUDE_DIRS})
       list(APPEND DEPENDENCIES_COMPILE_OPTIONS ${FMT_CFLAGS_OTHER})
@@ -167,16 +173,35 @@ if (SYSTEM_SDL2)
   endif()
   message(STATUS "Using system-installed SDL2")
 else()
-  set(SDL_SHARED OFF)
-  set(SDL_STATIC ON)
+  if (ANDROID)
+    set(SDL_SHARED ON CACHE BOOL "Force no dynamically-linked SDL" FORCE)
+    set(SDL_STATIC OFF CACHE BOOL "Force statically-linked SDL" FORCE)
+  else()
+    set(SDL_SHARED OFF CACHE BOOL "Force no dynamically-linked SDL" FORCE)
+    set(SDL_STATIC ON CACHE BOOL "Force statically-linked SDL" FORCE)
+  endif()
+  # https://github.com/libsdl-org/SDL/issues/1481
+  # On 2014-06-22 17:15:50 +0000, Sam Lantinga wrote:
+  #   If you link SDL statically, you also need to define HAVE_LIBC so it builds with the C runtime that your application uses.
+  #   This should probably go in a FAQ.
+  set(SDL_LIBC ON CACHE BOOL "Tell SDL that we want it to use our C runtime (required for proper static linking)" FORCE)
   add_subdirectory(extern/SDL EXCLUDE_FROM_ALL)
   list(APPEND DEPENDENCIES_INCLUDE_DIRS extern/SDL/include)
-  list(APPEND DEPENDENCIES_LIBRARIES SDL2-static)
+  if (ANDROID)
+    list(APPEND DEPENDENCIES_LIBRARIES SDL2)
+  else()
+    list(APPEND DEPENDENCIES_LIBRARIES SDL2-static)
+  endif()
+  # Work around add_subdirectory'd SDL not propagating HAVE_LIBC to MSVC furnace build
+  if (MSVC)
+    list(APPEND DEPENDENCIES_COMPILE_OPTIONS "/DHAVE_LIBC")
+  endif()
   message(STATUS "Using vendored SDL2")
 endif()
 
 set(AUDIO_SOURCES
 src/audio/abstract.cpp
+src/audio/midi.cpp
 src/audio/sdl.cpp
 )
 
@@ -199,6 +224,7 @@ endif()
 if (USE_RTMIDI)
   list(APPEND AUDIO_SOURCES src/audio/rtmidi.cpp)
   message(STATUS "Building with RtMidi")
+  list(APPEND DEPENDENCIES_DEFINES HAVE_RTMIDI)
 else()
   message(STATUS "Building without RtMidi")
 endif()
@@ -226,6 +252,7 @@ extern/adpcm/ymz_codec.c
 extern/Nuked-OPN2/ym3438.c
 extern/opm/opm.c
 extern/Nuked-OPLL/opll.c
+extern/opl/opl3.c
 src/engine/platform/sound/sn76496.cpp
 src/engine/platform/sound/ay8910.cpp
 src/engine/platform/sound/saa1099.cpp
@@ -233,6 +260,17 @@ src/engine/platform/sound/gb/apu.c
 src/engine/platform/sound/gb/timing.c
 src/engine/platform/sound/pce_psg.cpp
 src/engine/platform/sound/nes/apu.c
+src/engine/platform/sound/nes/fds.c
+src/engine/platform/sound/nes/mmc5.c
+src/engine/platform/sound/vera_psg.c
+src/engine/platform/sound/vera_pcm.c
+
+src/engine/platform/sound/nes_nsfplay/nes_apu.cpp
+src/engine/platform/sound/nes_nsfplay/nes_dmc.cpp
+src/engine/platform/sound/nes_nsfplay/nes_fds.cpp
+src/engine/platform/sound/nes_nsfplay/nes_mmc5.cpp
+src/engine/platform/sound/nes_nsfplay/nes_n106.cpp
+src/engine/platform/sound/nes_nsfplay/nes_vrc6.cpp
 
 src/engine/platform/sound/c64/sid.cc
 src/engine/platform/sound/c64/voice.cc
@@ -264,6 +302,24 @@ src/engine/platform/sound/lynx/Mikey.cpp
 
 src/engine/platform/sound/qsound.c
 
+src/engine/platform/sound/x1_010/x1_010.cpp
+
+src/engine/platform/sound/swan.cpp
+
+src/engine/platform/sound/su.cpp
+
+src/engine/platform/sound/k005289/k005289.cpp
+
+src/engine/platform/sound/n163/n163.cpp
+
+src/engine/platform/sound/vic20sound.c
+
+src/engine/platform/sound/vrcvi/vrcvi.cpp
+
+src/engine/platform/sound/scc/scc.cpp
+
+src/engine/platform/oplAInterface.cpp
+src/engine/platform/ym2608Interface.cpp
 src/engine/platform/ym2610Interface.cpp
 
 src/engine/blip_buf.c
@@ -273,6 +329,8 @@ src/engine/config.cpp
 src/engine/dispatchContainer.cpp
 src/engine/engine.cpp
 src/engine/fileOps.cpp
+src/engine/fileOpsIns.cpp
+src/engine/filter.cpp
 src/engine/instrument.cpp
 src/engine/macroInt.cpp
 src/engine/pattern.cpp
@@ -281,6 +339,7 @@ src/engine/sample.cpp
 src/engine/song.cpp
 src/engine/sysDef.cpp
 src/engine/wavetable.cpp
+src/engine/waveSynth.cpp
 src/engine/vgmOps.cpp
 src/engine/platform/abstract.cpp
 src/engine/platform/genesis.cpp
@@ -289,23 +348,41 @@ src/engine/platform/sms.cpp
 src/engine/platform/opll.cpp
 src/engine/platform/gb.cpp
 src/engine/platform/pce.cpp
+src/engine/platform/mmc5.cpp
 src/engine/platform/nes.cpp
 src/engine/platform/c64.cpp
 src/engine/platform/arcade.cpp
+src/engine/platform/tx81z.cpp
+src/engine/platform/ym2203.cpp
+src/engine/platform/ym2203ext.cpp
+src/engine/platform/ym2608.cpp
 src/engine/platform/ym2610.cpp
 src/engine/platform/ym2610ext.cpp
 src/engine/platform/ym2610b.cpp
 src/engine/platform/ym2610bext.cpp
 src/engine/platform/ay.cpp
 src/engine/platform/ay8930.cpp
+src/engine/platform/opl.cpp
+src/engine/platform/fds.cpp
 src/engine/platform/tia.cpp
 src/engine/platform/saa.cpp
 src/engine/platform/amiga.cpp
 src/engine/platform/pcspkr.cpp
 src/engine/platform/segapcm.cpp
 src/engine/platform/qsound.cpp
-src/engine/platform/dummy.cpp
+src/engine/platform/x1_010.cpp
 src/engine/platform/lynx.cpp
+src/engine/platform/su.cpp
+src/engine/platform/swan.cpp
+src/engine/platform/vera.cpp
+src/engine/platform/zxbeeper.cpp
+src/engine/platform/bubsyswsg.cpp
+src/engine/platform/n163.cpp
+src/engine/platform/pet.cpp
+src/engine/platform/vic20.cpp
+src/engine/platform/vrc6.cpp
+src/engine/platform/scc.cpp
+src/engine/platform/dummy.cpp
 )
 
 if (WIN32)
@@ -336,15 +413,44 @@ src/gui/font_unifont.cpp
 src/gui/font_icon.cpp
 src/gui/fonts.cpp
 src/gui/debug.cpp
+src/gui/fileDialog.cpp
 
 src/gui/intConst.cpp
 src/gui/guiConst.cpp
 
+src/gui/about.cpp
+src/gui/channels.cpp
+src/gui/chanOsc.cpp
+src/gui/compatFlags.cpp
+src/gui/cursor.cpp
+src/gui/dataList.cpp
+src/gui/debugWindow.cpp
+src/gui/doAction.cpp
+src/gui/editing.cpp
+src/gui/editControls.cpp
+src/gui/effectList.cpp
 src/gui/insEdit.cpp
+src/gui/log.cpp
+src/gui/mixer.cpp
+src/gui/midiMap.cpp
+src/gui/newSong.cpp
 src/gui/orders.cpp
+src/gui/osc.cpp
 src/gui/pattern.cpp
+src/gui/piano.cpp
+src/gui/presets.cpp
+src/gui/regView.cpp
+src/gui/sampleEdit.cpp
 src/gui/settings.cpp
+src/gui/songInfo.cpp
+src/gui/songNotes.cpp
+src/gui/stats.cpp
+src/gui/subSongs.cpp
+src/gui/sysConf.cpp
+src/gui/sysEx.cpp
 src/gui/util.cpp
+src/gui/waveEdit.cpp
+src/gui/volMeter.cpp
 src/gui/gui.cpp
 )
 
@@ -387,13 +493,20 @@ endif()
 
 if (NOT MSVC)
   set(WARNING_FLAGS -Wall -Wextra -Wno-unused-parameter)
+  if (CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    list(APPEND WARNING_FLAGS -Wno-cast-function-type)
+  endif()
   if (WARNINGS_ARE_ERRORS)
     list(APPEND WARNING_FLAGS -Werror)
   endif()
 else()
-  # /wd4100 == -Wno-unused-parameter
-  add_compile_options("/source-charset:utf-8")
-  set(WARNING_FLAGS /W4 /wd4100 /D_CRT_SECURE_NO_WARNINGS)
+  add_compile_options("/utf-8")
+  set(WARNING_FLAGS /W2 /D_CRT_SECURE_NO_WARNINGS)
+  list(APPEND WARNING_FLAGS
+    /wd4244 # implicit type conversions
+    /wd4305 # truncations
+    /wd4309 # truncations of constant values
+  )
   if (WARNINGS_ARE_ERRORS)
     list(APPEND WARNING_FLAGS /WX)
   endif()
@@ -411,6 +524,8 @@ endif()
 
 if (MSVC)
   add_executable(furnace WIN32 ${USED_SOURCES})
+elseif(ANDROID)
+  add_library(furnace SHARED ${USED_SOURCES})
 else()
   add_executable(furnace ${USED_SOURCES})
 endif()
@@ -432,31 +547,33 @@ if (PKG_CONFIG_FOUND AND (SYSTEM_FMT OR SYSTEM_LIBSNDFILE OR SYSTEM_ZLIB OR SYST
   endif()
 endif()
 
-install(TARGETS furnace RUNTIME DESTINATION bin)
-
-if (NOT WIN32 AND NOT APPLE)
-  include(GNUInstallDirs)
-  install(FILES res/furnace.desktop DESTINATION ${CMAKE_INSTALL_DATADIR}/applications)
-  install(FILES res/furnace.appdata.xml DESTINATION ${CMAKE_INSTALL_DATADIR}/metainfo)
-  install(DIRECTORY papers DESTINATION ${CMAKE_INSTALL_DOCDIR})
-  install(FILES LICENSE DESTINATION ${CMAKE_INSTALL_DATADIR}/licenses/furnace)
-  install(DIRECTORY demos DESTINATION ${CMAKE_INSTALL_DATADIR}/furnace)
-  install(FILES res/logo.png RENAME furnace.png DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor/1024x1024/apps)
+if (NOT ANDROID)
+  install(TARGETS furnace RUNTIME DESTINATION bin)
+  
+  if (NOT WIN32 AND NOT APPLE)
+    include(GNUInstallDirs)
+    install(FILES res/furnace.desktop DESTINATION ${CMAKE_INSTALL_DATADIR}/applications)
+    install(FILES res/furnace.appdata.xml DESTINATION ${CMAKE_INSTALL_DATADIR}/metainfo)
+    install(DIRECTORY papers DESTINATION ${CMAKE_INSTALL_DOCDIR})
+    install(FILES LICENSE DESTINATION ${CMAKE_INSTALL_DATADIR}/licenses/furnace)
+    install(DIRECTORY demos DESTINATION ${CMAKE_INSTALL_DATADIR}/furnace)
+    install(FILES res/logo.png RENAME furnace.png DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor/1024x1024/apps)
+  endif()
+  
+  set(CPACK_PACKAGE_NAME "Furnace")
+  set(CPACK_PACKAGE_VENDOR "tildearrow")
+  set(CPACK_PACKAGE_DESCRIPTION "free and open-source chiptune tracker")
+  
+  if (APPLE)
+    set(CPACK_GENERATOR Bundle)
+    set(CPACK_DMG_SLA_DIR ${CMAKE_SOURCE_DIR}/res/macLicense)
+    set(CPACK_DMG_SLA_LANGUAGES en)
+    set(CPACK_BUNDLE_NAME "Furnace")
+    set(CPACK_DMG_VOLUME_NAME "Furnace")
+    set(CPACK_BUNDLE_PLIST ${CMAKE_SOURCE_DIR}/res/Info.plist)
+    set(CPACK_BUNDLE_ICON ${CMAKE_SOURCE_DIR}/res/icon.icns)
+    set(CPACK_BUNDLE_STARTUP_COMMAND "furnace")
+  endif()
+  
+  include(CPack)
 endif()
-
-set(CPACK_PACKAGE_NAME "Furnace")
-set(CPACK_PACKAGE_VENDOR "tildearrow")
-set(CPACK_PACKAGE_DESCRIPTION "free and open-source chiptune tracker")
-
-if (APPLE)
-  set(CPACK_GENERATOR Bundle)
-  set(CPACK_DMG_SLA_DIR ${CMAKE_SOURCE_DIR}/res/macLicense)
-  set(CPACK_DMG_SLA_LANGUAGES en)
-  set(CPACK_BUNDLE_NAME "Furnace")
-  set(CPACK_DMG_VOLUME_NAME "Furnace")
-  set(CPACK_BUNDLE_PLIST ${CMAKE_SOURCE_DIR}/res/Info.plist)
-  set(CPACK_BUNDLE_ICON ${CMAKE_SOURCE_DIR}/res/icon.icns)
-  set(CPACK_BUNDLE_STARTUP_COMMAND "furnace")
-endif()
-
-include(CPack)

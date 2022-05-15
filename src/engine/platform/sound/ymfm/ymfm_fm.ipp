@@ -480,7 +480,7 @@ if (m_choffs == 0)
 #endif
 
 	// early out if the envelope is effectively off
-	if (m_env_attenuation > EG_QUIET)
+	if (m_env_attenuation > EG_QUIET && m_cache.eg_shift == 0)
 		return 0;
 
 	// get the absolute value of the sin, as attenuation, as a 4.8 fixed point value
@@ -808,7 +808,8 @@ fm_channel<RegisterType>::fm_channel(fm_engine_base<RegisterType> &owner, uint32
 	m_feedback_in(0),
 	m_op{ nullptr, nullptr, nullptr, nullptr },
 	m_regs(owner.regs()),
-	m_owner(owner)
+	m_owner(owner),
+  m_output{ 0, 0, 0, 0 }
 {
 }
 
@@ -823,6 +824,11 @@ void fm_channel<RegisterType>::reset()
 	// reset our data
 	m_feedback[0] = m_feedback[1] = 0;
 	m_feedback_in = 0;
+
+  m_output[0] = 0;
+  m_output[1] = 0;
+  m_output[2] = 0;
+  m_output[3] = 0;
 }
 
 
@@ -1236,6 +1242,7 @@ void fm_engine_base<RegisterType>::save_restore(ymfm_saved_state &state)
 	state.save_restore(m_irq_state);
 	state.save_restore(m_timer_running[0]);
 	state.save_restore(m_timer_running[1]);
+	state.save_restore(m_total_clocks);
 
 	// save the register/family data
 	m_regs.save_restore(state);
@@ -1261,6 +1268,9 @@ void fm_engine_base<RegisterType>::save_restore(ymfm_saved_state &state)
 template<class RegisterType>
 uint32_t fm_engine_base<RegisterType>::clock(uint32_t chanmask)
 {
+	// update the clock counter
+	m_total_clocks++;
+
 	// if something was modified, prepare
 	// also prepare every 4k samples to catch ending notes
 	if (m_modified_channels != 0 || m_prepare_count++ >= 4096)
@@ -1455,13 +1465,16 @@ void fm_engine_base<RegisterType>::assign_operators()
 //-------------------------------------------------
 
 template<class RegisterType>
-void fm_engine_base<RegisterType>::update_timer(uint32_t tnum, uint32_t enable)
+void fm_engine_base<RegisterType>::update_timer(uint32_t tnum, uint32_t enable, int32_t delta_clocks)
 {
 	// if the timer is live, but not currently enabled, set the timer
 	if (enable && !m_timer_running[tnum])
 	{
 		// period comes from the registers, and is different for each
 		uint32_t period = (tnum == 0) ? (1024 - m_regs.timer_a_value()) : 16 * (256 - m_regs.timer_b_value());
+
+		// caller can also specify a delta to account for other effects
+		period += delta_clocks;
 
 		// reset it
 		m_intf.ymfm_set_timer(tnum, period * OPERATORS * m_clock_prescale);
@@ -1499,7 +1512,7 @@ void fm_engine_base<RegisterType>::engine_timer_expired(uint32_t tnum)
 
 	// reset
 	m_timer_running[tnum] = false;
-	update_timer(tnum, 1);
+	update_timer(tnum, 1, 0);
 }
 
 
@@ -1557,9 +1570,11 @@ void fm_engine_base<RegisterType>::engine_mode_write(uint8_t data)
 			reset_mask |= RegisterType::STATUS_TIMERA;
 		set_reset_status(0, reset_mask);
 
-		// load timers
-		update_timer(1, m_regs.load_timer_b());
-		update_timer(0, m_regs.load_timer_a());
+		// load timers; note that timer B gets a small negative adjustment because
+		// the *16 multiplier is free-running, so the first tick of the clock
+		// is a bit shorter
+		update_timer(1, m_regs.load_timer_b(), -(m_total_clocks & 15));
+		update_timer(0, m_regs.load_timer_a(), 0);
 	}
 }
 

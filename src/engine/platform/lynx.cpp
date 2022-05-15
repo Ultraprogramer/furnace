@@ -82,7 +82,44 @@ static int32_t clamp(int32_t v, int32_t lo, int32_t hi)
 }
 
 const char* regCheatSheetLynx[]={
-  "DATA", "0",
+  "AUDIO0_VOLCNTRL", "20",
+  "AUDIO0_FEEDBACK", "21",
+  "AUDIO0_OUTPUT", "22",
+  "AUDIO0_SHIFT", "23",
+  "AUDIO0_BACKUP", "24",
+  "AUDIO0_CONTROL", "25",
+  "AUDIO0_COUNTER", "26",
+  "AUDIO0_OTHER", "27",
+  "AUDIO1_VOLCNTRL", "28",
+  "AUDIO1_FEEDBACK", "29",
+  "AUDIO1_OUTPUT", "2a",
+  "AUDIO1_SHIFT", "2b",
+  "AUDIO1_BACKUP", "2c",
+  "AUDIO1_CONTROL", "2d",
+  "AUDIO1_COUNTER", "2e",
+  "AUDIO1_OTHER", "2f",
+  "AUDIO2_VOLCNTRL", "30",
+  "AUDIO2_FEEDBACK", "31",
+  "AUDIO2_OUTPUT", "32",
+  "AUDIO2_SHIFT", "33",
+  "AUDIO2_BACKUP", "34",
+  "AUDIO2_CONTROL", "35",
+  "AUDIO2_COUNTER", "36",
+  "AUDIO2_OTHER", "37",
+  "AUDIO3_VOLCNTRL", "38",
+  "AUDIO3_FEEDBACK", "39",
+  "AUDIO3_OUTPUT", "3a",
+  "AUDIO3_SHIFT", "3b",
+  "AUDIO3_BACKUP", "3c",
+  "AUDIO3_CONTROL", "3d",
+  "AUDIO3_COUNTER", "3e",
+  "AUDIO3_OTHER", "3f",
+  "ATTENREG0", "40",
+  "ATTENREG1", "41",
+  "ATTENREG2", "42",
+  "ATTENREG3", "43",
+  "MPAN", "44",
+  "MSTEREO", "50",
   NULL
 };
 
@@ -105,33 +142,57 @@ const char* DivPlatformLynx::getEffectName(unsigned char effect) {
 }
 
 void DivPlatformLynx::acquire(short* bufL, short* bufR, size_t start, size_t len) {
-  mikey->sampleAudio( bufL + start, bufR + start, len );
+  mikey->sampleAudio( bufL + start, bufR + start, len, oscBuf );
 }
 
-void DivPlatformLynx::tick() {
+void DivPlatformLynx::tick(bool sysTick) {
   for (int i=0; i<4; i++) {
     chan[i].std.next();
-    if (chan[i].std.hadVol) {
-      chan[i].outVol=((chan[i].vol&127)*MIN(127,chan[i].std.vol))>>7;
+    if (chan[i].std.vol.had) {
+      chan[i].outVol=((chan[i].vol&127)*MIN(127,chan[i].std.vol.val))>>7;
       WRITE_VOLUME(i,(isMuted[i]?0:(chan[i].outVol&127)));
     }
-    if (chan[i].std.hadArp) {
+    if (chan[i].std.arp.had) {
       if (!chan[i].inPorta) {
-        if (chan[i].std.arpMode) {
-          chan[i].baseFreq=NOTE_PERIODIC(chan[i].std.arp);
-          chan[i].actualNote=chan[i].std.arp;
+        if (chan[i].std.arp.mode) {
+          chan[i].baseFreq=NOTE_PERIODIC(chan[i].std.arp.val);
+          chan[i].actualNote=chan[i].std.arp.val;
         } else {
-          chan[i].baseFreq=NOTE_PERIODIC(chan[i].note+chan[i].std.arp);
-          chan[i].actualNote=chan[i].note+chan[i].std.arp;
+          chan[i].baseFreq=NOTE_PERIODIC(chan[i].note+chan[i].std.arp.val);
+          chan[i].actualNote=chan[i].note+chan[i].std.arp.val;
         }
         chan[i].freqChanged=true;
       }
     } else {
-      if (chan[i].std.arpMode && chan[i].std.finishedArp) {
+      if (chan[i].std.arp.mode && chan[i].std.arp.finished) {
         chan[i].baseFreq=NOTE_PERIODIC(chan[i].note);
         chan[i].actualNote=chan[i].note;
         chan[i].freqChanged=true;
       }
+    }
+
+    if (chan[i].std.panL.had) {
+      chan[i].pan&=0x0f;
+      chan[i].pan|=(chan[i].std.panL.val&15)<<4;
+    }
+
+    if (chan[i].std.panR.had) {
+      chan[i].pan&=0xf0;
+      chan[i].pan|=chan[i].std.panR.val&15;
+    }
+
+    if (chan[i].std.panL.had || chan[i].std.panR.had) {
+      WRITE_ATTEN(i,chan[i].pan);
+    }
+
+    if (chan[i].std.pitch.had) {
+      if (chan[i].std.pitch.mode) {
+        chan[i].pitch2+=chan[i].std.pitch.val;
+        CLAMP_VAR(chan[i].pitch2,-2048,2048);
+      } else {
+        chan[i].pitch2=chan[i].std.pitch.val;
+      }
+      chan[i].freqChanged=true;
     }
 
     if (chan[i].freqChanged) {
@@ -140,16 +201,16 @@ void DivPlatformLynx::tick() {
         WRITE_OTHER(i, ((chan[i].lfsr&0xf00)>>4));
         chan[i].lfsr=-1;
       }
-      chan[i].fd=parent->calcFreq(chan[i].baseFreq,chan[i].pitch,true);
-      if (chan[i].std.hadDuty) {
-        chan[i].duty=chan[i].std.duty;
+      chan[i].fd=parent->calcFreq(chan[i].baseFreq,chan[i].pitch,true,0,chan[i].pitch2,chipClock,CHIP_DIVIDER);
+      if (chan[i].std.duty.had) {
+        chan[i].duty=chan[i].std.duty.val;
         WRITE_FEEDBACK(i, chan[i].duty.feedback);
       }
       WRITE_CONTROL(i, (chan[i].fd.clockDivider|0x18|chan[i].duty.int_feedback7));
       WRITE_BACKUP( i, chan[i].fd.backup );
-    }
-    else if (chan[i].std.hadDuty) {
-      chan[i].duty = chan[i].std.duty;
+      chan[i].freqChanged=false;
+    } else if (chan[i].std.duty.had) {
+      chan[i].duty = chan[i].std.duty.val;
       WRITE_FEEDBACK(i, chan[i].duty.feedback);
       WRITE_CONTROL(i, (chan[i].fd.clockDivider|0x18|chan[i].duty.int_feedback7));
     }
@@ -169,12 +230,12 @@ int DivPlatformLynx::dispatch(DivCommand c) {
       }
       chan[c.chan].active=true;
       WRITE_VOLUME(c.chan,(isMuted[c.chan]?0:(chan[c.chan].vol&127)));
-      chan[c.chan].std.init(parent->getIns(chan[c.chan].ins));
+      chan[c.chan].macroInit(parent->getIns(chan[c.chan].ins,DIV_INS_MIKEY));
       break;
     case DIV_CMD_NOTE_OFF:
       chan[c.chan].active=false;
       WRITE_VOLUME(c.chan, 0);
-      chan[c.chan].std.init(NULL);
+      chan[c.chan].macroInit(NULL);
       break;
     case DIV_CMD_LYNX_LFSR_LOAD:
       chan[c.chan].freqChanged=true;
@@ -186,23 +247,23 @@ int DivPlatformLynx::dispatch(DivCommand c) {
       break;
     case DIV_CMD_INSTRUMENT:
       chan[c.chan].ins=c.value;
-      //chan[c.chan].std.init(parent->getIns(chan[c.chan].ins));
+      //chan[c.chan].macroInit(parent->getIns(chan[c.chan].ins,DIV_INS_MIKEY));
       break;
     case DIV_CMD_VOLUME:
       if (chan[c.chan].vol!=c.value) {
         chan[c.chan].vol=c.value;
-        if (!chan[c.chan].std.hasVol) {
+        if (!chan[c.chan].std.vol.has) {
           chan[c.chan].outVol=c.value;
         }
         if (chan[c.chan].active) WRITE_VOLUME(c.chan,(isMuted[c.chan]?0:(chan[c.chan].vol&127)));
       }
       break;
     case DIV_CMD_PANNING:
-      chan[c.chan].pan=((c.value&0x0f)<<4)|((c.value&0xf0)>>4);
+      chan[c.chan].pan=(c.value&0xf0)|(c.value2>>4);
       WRITE_ATTEN(c.chan,chan[c.chan].pan);
       break;
     case DIV_CMD_GET_VOLUME:
-      if (chan[c.chan].std.hasVol) {
+      if (chan[c.chan].std.vol.has) {
         return chan[c.chan].vol;
       }
       return chan[c.chan].outVol;
@@ -235,14 +296,14 @@ int DivPlatformLynx::dispatch(DivCommand c) {
       break;
     }
     case DIV_CMD_LEGATO:
-      chan[c.chan].baseFreq=NOTE_PERIODIC(c.value+((chan[c.chan].std.willArp && !chan[c.chan].std.arpMode)?(chan[c.chan].std.arp):(0)));
+      chan[c.chan].baseFreq=NOTE_PERIODIC(c.value+((chan[c.chan].std.arp.will && !chan[c.chan].std.arp.mode)?(chan[c.chan].std.arp.val):(0)));
       chan[c.chan].freqChanged=true;
       chan[c.chan].note=c.value;
       chan[c.chan].actualNote=c.value;
       break;
     case DIV_CMD_PRE_PORTA:
       if (chan[c.chan].active && c.value2) {
-        if (parent->song.resetMacroOnPorta) chan[c.chan].std.init(parent->getIns(chan[c.chan].ins));
+        if (parent->song.resetMacroOnPorta) chan[c.chan].macroInit(parent->getIns(chan[c.chan].ins,DIV_INS_MIKEY));
       }
       chan[c.chan].inPorta=c.value;
       break;
@@ -281,6 +342,10 @@ void* DivPlatformLynx::getChanState(int ch) {
   return &chan[ch];
 }
 
+DivDispatchOscBuffer* DivPlatformLynx::getOscBuffer(int ch) {
+  return oscBuf[ch];
+}
+
 unsigned char* DivPlatformLynx::getRegisterPool()
 {
   return const_cast<unsigned char*>( mikey->getRegisterPool() );
@@ -292,11 +357,11 @@ int DivPlatformLynx::getRegisterPoolSize()
 }
 
 void DivPlatformLynx::reset() {
-
-  mikey = std::make_unique<Lynx::Mikey>( rate );
+  mikey=std::make_unique<Lynx::Mikey>(rate);
 
   for (int i=0; i<4; i++) {
-    chan[i]= DivPlatformLynx::Channel();
+    chan[i]=DivPlatformLynx::Channel();
+    chan[i].std.setEngine(parent);
   }
   if (dumpWrites) {
     addWrite(0xffffffff,0);
@@ -337,16 +402,24 @@ int DivPlatformLynx::init(DivEngine* p, int channels, int sugRate, unsigned int 
 
   for (int i=0; i<4; i++) {
     isMuted[i]=false;
+    oscBuf[i]=new DivDispatchOscBuffer;
   }
 
   chipClock = 16000000;
   rate = chipClock/128;
+
+  for (int i=0; i<4; i++) {
+    oscBuf[i]->rate=rate;
+  }
 
   reset();
   return 4;
 }
 
 void DivPlatformLynx::quit() {
+  for (int i=0; i<4; i++) {
+    delete oscBuf[i];
+  }
   mikey.reset();
 }
 

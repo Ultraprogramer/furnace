@@ -41,7 +41,7 @@ DivPattern* DivChannelData::getPattern(int index, bool create) {
 }
 
 void DivChannelData::wipePatterns() {
-  for (int i=0; i<128; i++) {
+  for (int i=0; i<256; i++) {
     if (data[i]!=NULL) {
       delete data[i];
       data[i]=NULL;
@@ -49,7 +49,7 @@ void DivChannelData::wipePatterns() {
   }
 }
 
-void DivPattern::copyOn(DivPattern *dest) {
+void DivPattern::copyOn(DivPattern* dest) {
   dest->name=name;
   memcpy(dest->data,data,sizeof(data));
 }
@@ -130,6 +130,6 @@ SafeReader* DivPattern::compile(int len, int fxRows) {
 }
 
 DivChannelData::DivChannelData():
-  effectRows(1) {
-  memset(data,0,128*sizeof(void*));
+  effectCols(1) {
+  memset(data,0,256*sizeof(void*));
 }

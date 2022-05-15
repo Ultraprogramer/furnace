@@ -22,13 +22,25 @@
 struct DivPattern {
   String name;
   short data[256][32];
+
+  /**
+   * copy this pattern to another.
+   * @param dest the destination pattern.
+   */
   void copyOn(DivPattern* dest);
+
+  /**
+   * don't use yet!
+   * @param len the pattern length
+   * @param fxRows number of effect ...columns
+   * @return a SafeReader.
+   */
   SafeReader* compile(int len=256, int fxRows=1);
   DivPattern();
 };
 
 struct DivChannelData {
-  unsigned char effectRows;
+  unsigned char effectCols;
   // data goes as follows: data[ROW][TYPE]
   // TYPE is:
   // 0: note
@@ -36,8 +48,20 @@ struct DivChannelData {
   // 2: instrument
   // 3: volume
   // 4-5+: effect/effect value
-  DivPattern* data[128];
+  // do NOT access directly unless you know what you're doing!
+  DivPattern* data[256];
+
+  /**
+   * get a pattern from this channel, or the empty pattern if not initialized.
+   * @param index the pattern ID.
+   * @param create whether to initialize a new pattern if not init'ed. always use true if you're going to modify it!
+   * @return a DivPattern.
+   */
   DivPattern* getPattern(int index, bool create);
+
+  /**
+   * destroy all patterns on this DivChannelData.
+   */
   void wipePatterns();
   DivChannelData();
 };

@@ -60,7 +60,7 @@ bool displayEngineFailError=false;
 
 std::vector<TAParam> params;
 
-bool pHelp(String) {
+TAParamResult pHelp(String) {
   printf("usage: furnace [params] [filename]\n"
          "you may specify the following parameters:\n");
   for (auto& i: params) {
@@ -70,26 +70,26 @@ bool pHelp(String) {
       printf("  -%s: %s\n",i.name.c_str(),i.desc.c_str());
     }
   }
-  return false;
+  return TA_PARAM_QUIT;
 }
 
-bool pAudio(String val) {
+TAParamResult pAudio(String val) {
   if (outName!="") {
-    logE("can't use -audio and -output at the same time.\n");
-    return false;
+    logE("can't use -audio and -output at the same time.");
+    return TA_PARAM_ERROR;
   }
   if (val=="jack") {
     e.setAudio(DIV_AUDIO_JACK);
   } else if (val=="sdl") {
     e.setAudio(DIV_AUDIO_SDL);
   } else {
-    logE("invalid value for audio engine! valid values are: jack, sdl.\n");
-    return false;
+    logE("invalid value for audio engine! valid values are: jack, sdl.");
+    return TA_PARAM_ERROR;
   }
-  return true;
+  return TA_PARAM_SUCCESS;
 }
 
-bool pView(String val) {
+TAParamResult pView(String val) {
   if (val=="pattern") {
     e.setView(DIV_STATUS_PATTERN);
   } else if (val=="commands") {
@@ -97,19 +97,21 @@ bool pView(String val) {
   } else if (val=="nothing") {
     e.setView(DIV_STATUS_NOTHING);
   } else {
-    logE("invalid value for view type! valid values are: pattern, commands, nothing.\n");
-    return false;
+    logE("invalid value for view type! valid values are: pattern, commands, nothing.");
+    return TA_PARAM_ERROR;
   }
-  return true;
+  return TA_PARAM_SUCCESS;
 }
 
-bool pConsole(String val) {
+TAParamResult pConsole(String val) {
   consoleMode=true;
-  return true;
+  return TA_PARAM_SUCCESS;
 }
 
-bool pLogLevel(String val) {
-  if (val=="debug") {
+TAParamResult pLogLevel(String val) {
+  if (val=="trace") {
+    logLevel=LOGLEVEL_TRACE;
+  } else if (val=="debug") {
     logLevel=LOGLEVEL_DEBUG;
   } else if (val=="info") {
     logLevel=LOGLEVEL_INFO;
@@ -118,13 +120,13 @@ bool pLogLevel(String val) {
   } else if (val=="error") {
     logLevel=LOGLEVEL_ERROR;
   } else {
-    logE("invalid value for loglevel! valid values are: debug, info, warning, error.\n");
-    return false;
+    logE("invalid value for loglevel! valid values are: trace, debug, info, warning, error.");
+    return TA_PARAM_ERROR;
   }
-  return true;
+  return TA_PARAM_SUCCESS;
 }
 
-bool pVersion(String) {
+TAParamResult pVersion(String) {
   printf("Furnace version " DIV_VERSION ".\n\n");
   printf("copyright (C) 2021-2022 tildearrow and contributors.\n");
   printf("licensed under the GNU General Public License version 2 or later\n");
@@ -150,10 +152,10 @@ bool pVersion(String) {
   printf("- puNES by FHorse (GPLv2)\n");
   printf("- reSID by Dag Lem (GPLv2)\n");
   printf("- Stella by Stella Team (GPLv2)\n");
-  return false;
+  return TA_PARAM_QUIT;
 }
 
-bool pWarranty(String) {
+TAParamResult pWarranty(String) {
   printf("This program is free software; you can redistribute it and/or\n"
          "modify it under the terms of the GNU General Public License\n"
          "as published by the Free Software Foundation; either version 2\n"
@@ -167,10 +169,10 @@ bool pWarranty(String) {
          "You should have received a copy of the GNU General Public License\n"
          "along with this program; if not, write to the Free Software\n"
          "Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.\n");
-  return false;
+  return TA_PARAM_QUIT;
 }
 
-bool pLoops(String val) {
+TAParamResult pLoops(String val) {
   try {
     int count=std::stoi(val);
     if (count<0) {
@@ -179,13 +181,13 @@ bool pLoops(String val) {
       loops=count+1;
     }
   } catch (std::exception& e) {
-    logE("loop count shall be a number.\n");
-    return false;
+    logE("loop count shall be a number.");
+    return TA_PARAM_ERROR;
   }
-  return true;
+  return TA_PARAM_SUCCESS;
 }
 
-bool pOutMode(String val) {
+TAParamResult pOutMode(String val) {
   if (val=="one") {
     outMode=DIV_EXPORT_MODE_ONE;
   } else if (val=="persys") {
@@ -193,22 +195,22 @@ bool pOutMode(String val) {
   } else if (val=="perchan") {
     outMode=DIV_EXPORT_MODE_MANY_CHAN;
   } else {
-    logE("invalid value for outmode! valid values are: one, persys and perchan.\n");
-    return false;
+    logE("invalid value for outmode! valid values are: one, persys and perchan.");
+    return TA_PARAM_ERROR;
   }
-  return true;
+  return TA_PARAM_SUCCESS;
 }
 
-bool pOutput(String val) {
+TAParamResult pOutput(String val) {
   outName=val;
   e.setAudio(DIV_AUDIO_DUMMY);
-  return true;
+  return TA_PARAM_SUCCESS;
 }
 
-bool pVGMOut(String val) {
+TAParamResult pVGMOut(String val) {
   vgmOutName=val;
   e.setAudio(DIV_AUDIO_DUMMY);
-  return true;
+  return TA_PARAM_SUCCESS;
 }
 
 bool needsValue(String param) {
@@ -237,8 +239,11 @@ void initParams() {
   params.push_back(TAParam("W","warranty",false,pWarranty,"","view warranty disclaimer."));
 }
 
+// TODO: CoInitializeEx on Windows?
+// TODO: add crash log
 int main(int argc, char** argv) {
-#if !(defined(__APPLE__) || defined(_WIN32))
+  initLog();
+#if !(defined(__APPLE__) || defined(_WIN32) || defined(ANDROID))
   // workaround for Wayland HiDPI issue
   if (getenv("SDL_VIDEODRIVER")==NULL) {
     setenv("SDL_VIDEODRIVER","x11",1);
@@ -268,7 +273,7 @@ int main(int argc, char** argv) {
             val=argv[i+1];
             i++;
           } else {
-            logE("incomplete param %s.\n",arg.c_str());
+            logE("incomplete param %s.",arg.c_str());
             return 1;
           }
         }
@@ -278,7 +283,16 @@ int main(int argc, char** argv) {
       }
       for (size_t j=0; j<params.size(); j++) {
         if (params[j].name==arg || params[j].shortName==arg) {
-          if (!params[j].func(val)) return 1;
+          switch (params[j].func(val)) {
+            case TA_PARAM_ERROR:
+              return 1;
+              break;
+            case TA_PARAM_SUCCESS:
+              break;
+            case TA_PARAM_QUIT:
+              return 0;
+              break;
+          }
           break;
         }
       }
@@ -305,12 +319,12 @@ int main(int argc, char** argv) {
 #endif
 
   if (fileName.empty() && consoleMode) {
-    logI("usage: %s file\n",argv[0]);
+    logI("usage: %s file",argv[0]);
     return 1;
   }
-  logI("Furnace version " DIV_VERSION ".\n");
+  logI("Furnace version " DIV_VERSION ".");
   if (!fileName.empty()) {
-    logI("loading module...\n");
+    logI("loading module...");
     FILE* f=ps_fopen(fileName.c_str(),"rb");
     if (f==NULL) {
       perror("error");
@@ -351,12 +365,12 @@ int main(int argc, char** argv) {
     }
     fclose(f);
     if (!e.load(file,(size_t)len)) {
-      logE("could not open file!\n");
+      logE("could not open file!");
       return 1;
     }
   }
   if (!e.init()) {
-    logE("could not initialize engine!\n");
+    logE("could not initialize engine!");
     if (consoleMode) {
       return 1;
     } else {
@@ -372,12 +386,12 @@ int main(int argc, char** argv) {
           fwrite(w->getFinalBuf(),1,w->size(),f);
           fclose(f);
         } else {
-          logE("could not open file! %s\n",strerror(errno));
+          logE("could not open file! %s",strerror(errno));
         }
         w->finish();
         delete w;
       } else {
-        logE("could not write VGM!\n");
+        logE("could not write VGM!");
       }
     }
     if (outName!="") {
@@ -389,7 +403,7 @@ int main(int argc, char** argv) {
   }
 
   if (consoleMode) {
-    logI("playing...\n");
+    logI("playing...");
     e.play();
 #ifdef HAVE_GUI
     SDL_Event ev;
@@ -415,7 +429,7 @@ int main(int argc, char** argv) {
   if (!g.init()) return 1;
 
   if (displayEngineFailError) {
-    logE("displaying engine fail error.\n");
+    logE("displaying engine fail error.");
     g.showError("error while initializing audio!");
   }
 
@@ -424,13 +438,13 @@ int main(int argc, char** argv) {
   }
 
   g.loop();
-  logI("closing GUI.\n");
+  logI("closing GUI.");
   g.finish();
 #else
-  logE("GUI requested but GUI not compiled!\n");
+  logE("GUI requested but GUI not compiled!");
 #endif
 
-  logI("stopping engine.\n");
+  logI("stopping engine.");
   e.quit();
   return 0;
 }

@@ -23,7 +23,10 @@
 
 #ifdef __linux__
 #include <sys/ioctl.h>
+#include <sys/select.h>
+#include <fcntl.h>
 #include <unistd.h>
+#include <linux/input.h>
 #include <linux/kd.h>
 #endif
 
@@ -47,9 +50,11 @@ const float cut=0.05;
 const float reso=0.06;
 
 void DivPlatformPCSpeaker::acquire_unfilt(short* bufL, short* bufR, size_t start, size_t len) {
+  int out=0;
   for (size_t i=start; i<start+len; i++) {
     if (on) {
       pos-=PCSPKR_DIVIDER;
+      if (pos>freq) pos=freq;
       while (pos<0) {
         if (freq<1) {
           pos=1;
@@ -57,9 +62,12 @@ void DivPlatformPCSpeaker::acquire_unfilt(short* bufL, short* bufR, size_t start
           pos+=freq;
         }
       }
-      bufL[i]=(pos>(freq>>1) && !isMuted[0])?32767:0;
+      out=(pos>(freq>>1) && !isMuted[0])?32767:0;
+      bufL[i]=out;
+      oscBuf->data[oscBuf->needle++]=out;
     } else {
       bufL[i]=0;
+      oscBuf->data[oscBuf->needle++]=0;
     }
   }
 }
@@ -68,6 +76,7 @@ void DivPlatformPCSpeaker::acquire_cone(short* bufL, short* bufR, size_t start, 
   for (size_t i=start; i<start+len; i++) {
     if (on) {
       pos-=PCSPKR_DIVIDER;
+      if (pos>freq) pos=freq;
       while (pos<0) {
         if (freq<1) {
           pos=1;
@@ -82,8 +91,10 @@ void DivPlatformPCSpeaker::acquire_cone(short* bufL, short* bufR, size_t start, 
       if (out>1.0) out=1.0;
       if (out<-1.0) out=-1.0;
       bufL[i]=out*32767;
+      oscBuf->data[oscBuf->needle++]=out*32767;
     } else {
       bufL[i]=0;
+      oscBuf->data[oscBuf->needle++]=0;
     }
   }
 }
@@ -92,6 +103,7 @@ void DivPlatformPCSpeaker::acquire_piezo(short* bufL, short* bufR, size_t start,
   for (size_t i=start; i<start+len; i++) {
     if (on) {
       pos-=PCSPKR_DIVIDER;
+      if (pos>freq) pos=freq;
       while (pos<0) {
         if (freq<1) {
           pos=1;
@@ -106,21 +118,58 @@ void DivPlatformPCSpeaker::acquire_piezo(short* bufL, short* bufR, size_t start,
       if (out>1.0) out=1.0;
       if (out<-1.0) out=-1.0;
       bufL[i]=out*32767;
+      oscBuf->data[oscBuf->needle++]=out*32767;
     } else {
       bufL[i]=0;
+      oscBuf->data[oscBuf->needle++]=0;
     }
   }
 }
 
-void DivPlatformPCSpeaker::acquire_real(short* bufL, short* bufR, size_t start, size_t len) {
+void DivPlatformPCSpeaker::beepFreq(int freq) {
 #ifdef __linux__
+  static struct input_event ie;
+  if (beepFD>=0) {
+    gettimeofday(&ie.time,NULL);
+    ie.type=EV_SND;
+    ie.code=SND_TONE;
+    if (freq>0) {
+      ie.value=chipClock/freq;
+    } else {
+      ie.value=0;
+    }
+    if (write(beepFD,&ie,sizeof(struct input_event))<0) {
+      perror("error while writing frequency!");
+    } else {
+      //printf("writing freq: %d\n",freq);
+    }
+  }
+#endif
+}
+
+void DivPlatformPCSpeaker::acquire_real(short* bufL, short* bufR, size_t start, size_t len) {
+  int out=0;
   if (lastOn!=on || lastFreq!=freq) {
     lastOn=on;
     lastFreq=freq;
-    ioctl(STDOUT_FILENO,KIOCSOUND,on?freq:0);
+    beepFreq((on && !isMuted[0])?freq:0);
   }
-#endif
   for (size_t i=start; i<start+len; i++) {
+    if (on) {
+      pos-=PCSPKR_DIVIDER;
+      if (pos>freq) pos=freq;
+      while (pos<0) {
+        if (freq<1) {
+          pos=1;
+        } else {
+          pos+=freq;
+        }
+      }
+      out=(pos>(freq>>1) && !isMuted[0])?32767:0;
+      oscBuf->data[oscBuf->needle++]=out;
+    } else {
+      oscBuf->data[oscBuf->needle++]=0;
+    }
     bufL[i]=0;
   }
 }
@@ -142,30 +191,39 @@ void DivPlatformPCSpeaker::acquire(short* bufL, short* bufR, size_t start, size_
   }
 }
 
-void DivPlatformPCSpeaker::tick() {
+void DivPlatformPCSpeaker::tick(bool sysTick) {
   for (int i=0; i<1; i++) {
     chan[i].std.next();
-    if (chan[i].std.hadVol) {
-      // ok, why are the volumes like that?
-      chan[i].outVol=chan[i].vol;
+    if (chan[i].std.vol.had) {
+      chan[i].outVol=(chan[i].vol && chan[i].std.vol.val);
+      on=chan[i].outVol;
     }
-    if (chan[i].std.hadArp) {
+    if (chan[i].std.arp.had) {
       if (!chan[i].inPorta) {
-        if (chan[i].std.arpMode) {
-          chan[i].baseFreq=NOTE_PERIODIC(chan[i].std.arp);
+        if (chan[i].std.arp.mode) {
+          chan[i].baseFreq=NOTE_PERIODIC(chan[i].std.arp.val);
         } else {
-          chan[i].baseFreq=NOTE_PERIODIC(chan[i].note+chan[i].std.arp);
+          chan[i].baseFreq=NOTE_PERIODIC(chan[i].note+chan[i].std.arp.val);
         }
       }
       chan[i].freqChanged=true;
     } else {
-      if (chan[i].std.arpMode && chan[i].std.finishedArp) {
+      if (chan[i].std.arp.mode && chan[i].std.arp.finished) {
         chan[i].baseFreq=NOTE_PERIODIC(chan[i].note);
         chan[i].freqChanged=true;
       }
     }
+    if (chan[i].std.pitch.had) {
+      if (chan[i].std.pitch.mode) {
+        chan[i].pitch2+=chan[i].std.pitch.val;
+        CLAMP_VAR(chan[i].pitch2,-2048,2048);
+      } else {
+        chan[i].pitch2=chan[i].std.pitch.val;
+      }
+      chan[i].freqChanged=true;
+    }
     if (chan[i].freqChanged || chan[i].keyOn || chan[i].keyOff) {
-      chan[i].freq=parent->calcFreq(chan[i].baseFreq,chan[i].pitch,true)-1;
+      chan[i].freq=parent->calcFreq(chan[i].baseFreq,chan[i].pitch,true,0,chan[i].pitch2,chipClock,CHIP_DIVIDER)-1;
       if (chan[i].freq<0) chan[i].freq=0;
       if (chan[i].freq>65535) chan[i].freq=65535;
       if (chan[i].keyOn) {
@@ -192,12 +250,12 @@ int DivPlatformPCSpeaker::dispatch(DivCommand c) {
       }
       chan[c.chan].active=true;
       chan[c.chan].keyOn=true;
-      chan[c.chan].std.init(parent->getIns(chan[c.chan].ins));
+      chan[c.chan].macroInit(parent->getIns(chan[c.chan].ins,DIV_INS_BEEPER));
       break;
     case DIV_CMD_NOTE_OFF:
       chan[c.chan].active=false;
       chan[c.chan].keyOff=true;
-      chan[c.chan].std.init(NULL);
+      chan[c.chan].macroInit(NULL);
       break;
     case DIV_CMD_NOTE_OFF_ENV:
     case DIV_CMD_ENV_RELEASE:
@@ -211,7 +269,7 @@ int DivPlatformPCSpeaker::dispatch(DivCommand c) {
     case DIV_CMD_VOLUME:
       if (chan[c.chan].vol!=c.value) {
         chan[c.chan].vol=c.value;
-        if (!chan[c.chan].std.hasVol) {
+        if (!chan[c.chan].std.vol.has) {
           chan[c.chan].outVol=c.value;
         }
         if (chan[c.chan].active) {
@@ -251,13 +309,13 @@ int DivPlatformPCSpeaker::dispatch(DivCommand c) {
     }
     case DIV_CMD_LEGATO:
       if (c.chan==3) break;
-      chan[c.chan].baseFreq=NOTE_PERIODIC(c.value+((chan[c.chan].std.willArp && !chan[c.chan].std.arpMode)?(chan[c.chan].std.arp):(0)));
+      chan[c.chan].baseFreq=NOTE_PERIODIC(c.value+((chan[c.chan].std.arp.will && !chan[c.chan].std.arp.mode)?(chan[c.chan].std.arp.val):(0)));
       chan[c.chan].freqChanged=true;
       chan[c.chan].note=c.value;
       break;
     case DIV_CMD_PRE_PORTA:
       if (chan[c.chan].active && c.value2) {
-        if (parent->song.resetMacroOnPorta) chan[c.chan].std.init(parent->getIns(chan[c.chan].ins));
+        if (parent->song.resetMacroOnPorta) chan[c.chan].macroInit(parent->getIns(chan[c.chan].ins,DIV_INS_BEEPER));
       }
       chan[c.chan].inPorta=c.value;
       break;
@@ -287,7 +345,18 @@ void* DivPlatformPCSpeaker::getChanState(int ch) {
   return &chan[ch];
 }
 
+DivDispatchOscBuffer* DivPlatformPCSpeaker::getOscBuffer(int ch) {
+  return oscBuf;
+}
+
 unsigned char* DivPlatformPCSpeaker::getRegisterPool() {
+  if (on) {
+    regPool[0]=freq;
+    regPool[1]=freq>>8;
+  } else {
+    regPool[0]=0;
+    regPool[1]=0;
+  }
   return regPool;
 }
 
@@ -298,6 +367,7 @@ int DivPlatformPCSpeaker::getRegisterPoolSize() {
 void DivPlatformPCSpeaker::reset() {
   for (int i=0; i<1; i++) {
     chan[i]=DivPlatformPCSpeaker::Channel();
+    chan[i].std.setEngine(parent);
   }
   if (dumpWrites) {
     addWrite(0xffffffff,0);
@@ -314,8 +384,16 @@ void DivPlatformPCSpeaker::reset() {
 
   if (speakerType==3) {
 #ifdef __linux__
-    ioctl(STDOUT_FILENO,KIOCSOUND,0);
+    if (beepFD==-1) {
+      beepFD=open("/dev/input/by-path/platform-pcspkr-event-spkr",O_WRONLY);
+      if (beepFD<0) {
+        perror("error while opening PC speaker");
+      }
+    }
 #endif
+    beepFreq(0);
+  } else {
+    beepFreq(0);
   }
 
   memset(regPool,0,2);
@@ -329,12 +407,17 @@ void DivPlatformPCSpeaker::setFlags(unsigned int flags) {
   chipClock=COLOR_NTSC/3.0;
   rate=chipClock/PCSPKR_DIVIDER;
   speakerType=flags&3;
+  oscBuf->rate=rate;
 }
 
 void DivPlatformPCSpeaker::notifyInsDeletion(void* ins) {
   for (int i=0; i<1; i++) {
     chan[i].std.notifyInsDeletion((DivInstrument*)ins);
   }
+}
+
+void DivPlatformPCSpeaker::notifyPlaybackStop() {
+  beepFreq(0);
 }
 
 void DivPlatformPCSpeaker::poke(unsigned int addr, unsigned short val) {
@@ -349,9 +432,11 @@ int DivPlatformPCSpeaker::init(DivEngine* p, int channels, int sugRate, unsigned
   parent=p;
   dumpWrites=false;
   skipRegisterWrites=false;
+  beepFD=-1;
   for (int i=0; i<1; i++) {
     isMuted[i]=false;
   }
+  oscBuf=new DivDispatchOscBuffer;
   setFlags(flags);
 
   reset();
@@ -360,10 +445,12 @@ int DivPlatformPCSpeaker::init(DivEngine* p, int channels, int sugRate, unsigned
 
 void DivPlatformPCSpeaker::quit() {
   if (speakerType==3) {
-#ifdef __linux__
-    ioctl(STDOUT_FILENO,KIOCSOUND,0);
-#endif
+    beepFreq(0);
   }
+#ifdef __linux__
+  if (beepFD>=0) close(beepFD);
+#endif
+  delete oscBuf;
 }
 
 DivPlatformPCSpeaker::~DivPlatformPCSpeaker() {

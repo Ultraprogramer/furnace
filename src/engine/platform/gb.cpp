@@ -87,20 +87,19 @@ void DivPlatformGB::acquire(short* bufL, short* bufR, size_t start, size_t len) 
     GB_advance_cycles(gb,16);
     bufL[i]=gb->apu_output.final_sample.left;
     bufR[i]=gb->apu_output.final_sample.right;
+
+    for (int i=0; i<4; i++) {
+      oscBuf[i]->data[oscBuf[i]->needle++]=(gb->apu_output.current_sample[i].left+gb->apu_output.current_sample[i].right)<<6;
+    }
   }
 }
 
 void DivPlatformGB::updateWave() {
-  DivWavetable* wt=parent->getWave(chan[2].wave);
   rWrite(0x1a,0);
   for (int i=0; i<16; i++) {
-    if (wt->max<1 || wt->len<1) {
-      rWrite(0x30+i,0);
-    } else {
-      unsigned char nibble1=15-((wt->data[(i*2)*wt->len/32]*15)/wt->max);
-      unsigned char nibble2=15-((wt->data[(1+i*2)*wt->len/32]*15)/wt->max);
-      rWrite(0x30+i,(nibble1<<4)|nibble2);
-    }
+    int nibble1=15-ws.output[i<<1];
+    int nibble2=15-ws.output[1+(i<<1)];
+    rWrite(0x30+i,(nibble1<<4)|nibble2);
   }
 }
 
@@ -151,49 +150,74 @@ static unsigned char noiseTable[256]={
   0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
 };
 
-void DivPlatformGB::tick() {
+void DivPlatformGB::tick(bool sysTick) {
   for (int i=0; i<4; i++) {
     chan[i].std.next();
-    if (chan[i].std.hadArp) {
+    if (chan[i].std.arp.had) {
       if (i==3) { // noise
-        if (chan[i].std.arpMode) {
-          chan[i].baseFreq=chan[i].std.arp+24;
+        if (chan[i].std.arp.mode) {
+          chan[i].baseFreq=chan[i].std.arp.val+24;
         } else {
-          chan[i].baseFreq=chan[i].note+chan[i].std.arp;
+          chan[i].baseFreq=chan[i].note+chan[i].std.arp.val;
         }
         if (chan[i].baseFreq>255) chan[i].baseFreq=255;
         if (chan[i].baseFreq<0) chan[i].baseFreq=0;
       } else {
         if (!chan[i].inPorta) {
-          if (chan[i].std.arpMode) {
-            chan[i].baseFreq=NOTE_PERIODIC(chan[i].std.arp+24);
+          if (chan[i].std.arp.mode) {
+            chan[i].baseFreq=NOTE_PERIODIC(chan[i].std.arp.val+24);
           } else {
-            chan[i].baseFreq=NOTE_PERIODIC(chan[i].note+chan[i].std.arp);
+            chan[i].baseFreq=NOTE_PERIODIC(chan[i].note+chan[i].std.arp.val);
           }
         }
       }
       chan[i].freqChanged=true;
     } else {
-      if (chan[i].std.arpMode && chan[i].std.finishedArp) {
+      if (chan[i].std.arp.mode && chan[i].std.arp.finished) {
         chan[i].baseFreq=NOTE_PERIODIC(chan[i].note);
         chan[i].freqChanged=true;
       }
     }
-    if (chan[i].std.hadDuty) {
-      chan[i].duty=chan[i].std.duty;
-      DivInstrument* ins=parent->getIns(chan[i].ins);
+    if (chan[i].std.duty.had) {
+      chan[i].duty=chan[i].std.duty.val;
+      DivInstrument* ins=parent->getIns(chan[i].ins,DIV_INS_GB);
       if (i!=2) {
         rWrite(16+i*5+1,((chan[i].duty&3)<<6)|(63-(ins->gb.soundLen&63)));
       } else {
         if (parent->song.waveDutyIsVol) {
-          rWrite(16+i*5+2,gbVolMap[(chan[i].std.duty&3)<<2]);
+          rWrite(16+i*5+2,gbVolMap[(chan[i].std.duty.val&3)<<2]);
         }
       }
     }
-    if (chan[i].std.hadWave) {
-      if (chan[i].wave!=chan[i].std.wave) {
-        chan[i].wave=chan[i].std.wave;
-        if (i==2) {
+    if (i==2 && chan[i].std.wave.had) {
+      if (chan[i].wave!=chan[i].std.wave.val || ws.activeChanged()) {
+        chan[i].wave=chan[i].std.wave.val;
+        ws.changeWave1(chan[i].wave);
+        if (!chan[i].keyOff) chan[i].keyOn=true;
+      }
+    }
+    if (chan[i].std.panL.had) {
+      lastPan&=~(0x11<<i);
+      lastPan|=((chan[i].std.panL.val&1)<<i)|((chan[i].std.panL.val&2)<<(i+3));
+      rWrite(0x25,procMute());
+    }
+    if (chan[i].std.pitch.had) {
+      if (chan[i].std.pitch.mode) {
+        chan[i].pitch2+=chan[i].std.pitch.val;
+        CLAMP_VAR(chan[i].pitch2,-2048,2048);
+      } else {
+        chan[i].pitch2=chan[i].std.pitch.val;
+      }
+      chan[i].freqChanged=true;
+    }
+    if (chan[i].std.phaseReset.had) {
+      if (chan[i].std.phaseReset.val==1) {
+        chan[i].keyOn=true;
+      }
+    }
+    if (i==2) {
+      if (chan[i].active) {
+        if (ws.tick()) {
           updateWave();
           if (!chan[i].keyOff) chan[i].keyOn=true;
         }
@@ -206,22 +230,19 @@ void DivPlatformGB::tick() {
       }
     }
     if (chan[i].freqChanged || chan[i].keyOn || chan[i].keyOff) {
-      DivInstrument* ins=parent->getIns(chan[i].ins);
+      DivInstrument* ins=parent->getIns(chan[i].ins,DIV_INS_GB);
       if (i==3) { // noise
         int ntPos=chan[i].baseFreq;
         if (ntPos<0) ntPos=0;
         if (ntPos>255) ntPos=255;
         chan[i].freq=noiseTable[ntPos];
       } else {
-        chan[i].freq=parent->calcFreq(chan[i].baseFreq,chan[i].pitch,true);
+        chan[i].freq=parent->calcFreq(chan[i].baseFreq,chan[i].pitch,true,0,chan[i].pitch2,chipClock,CHIP_DIVIDER);
         if (chan[i].freq>2047) chan[i].freq=2047;
+        if (chan[i].freq<0) chan[i].freq=0;
       }
       if (chan[i].keyOn) {
         if (i==2) { // wave
-          if (chan[i].wave<0) {
-            chan[i].wave=0;
-            updateWave();
-          }
           rWrite(16+i*5,0x80);
           rWrite(16+i*5+2,gbVolMap[chan[i].vol]);
         } else {
@@ -257,7 +278,8 @@ void DivPlatformGB::muteChannel(int ch, bool mute) {
 
 int DivPlatformGB::dispatch(DivCommand c) {
   switch (c.cmd) {
-    case DIV_CMD_NOTE_ON:
+    case DIV_CMD_NOTE_ON: {
+      DivInstrument* ins=parent->getIns(chan[c.chan].ins,DIV_INS_GB);
       if (c.value!=DIV_NOTE_NULL) {
         if (c.chan==3) { // noise
           chan[c.chan].baseFreq=c.value;
@@ -269,12 +291,21 @@ int DivPlatformGB::dispatch(DivCommand c) {
       }
       chan[c.chan].active=true;
       chan[c.chan].keyOn=true;
-      chan[c.chan].std.init(parent->getIns(chan[c.chan].ins));
+      chan[c.chan].macroInit(ins);
+      if (c.chan==2) {
+        if (chan[c.chan].wave<0) {
+          chan[c.chan].wave=0;
+          ws.changeWave1(chan[c.chan].wave);
+        }
+        ws.init(ins,32,15,chan[c.chan].insChanged);
+      }
+      chan[c.chan].insChanged=false;
       break;
+    }
     case DIV_CMD_NOTE_OFF:
       chan[c.chan].active=false;
       chan[c.chan].keyOff=true;
-      chan[c.chan].std.init(NULL);
+      chan[c.chan].macroInit(NULL);
       break;
     case DIV_CMD_NOTE_OFF_ENV:
     case DIV_CMD_ENV_RELEASE:
@@ -283,8 +314,13 @@ int DivPlatformGB::dispatch(DivCommand c) {
     case DIV_CMD_INSTRUMENT:
       if (chan[c.chan].ins!=c.value || c.value2==1) {
         chan[c.chan].ins=c.value;
+        chan[c.chan].insChanged=true;
         if (c.chan!=2) {
-          chan[c.chan].vol=parent->getIns(chan[c.chan].ins)->gb.envVol;
+          DivInstrument* ins=parent->getIns(chan[c.chan].ins,DIV_INS_GB);
+          chan[c.chan].vol=ins->gb.envVol;
+          if (parent->song.gbInsAffectsEnvelope) {
+            rWrite(16+c.chan*5+2,((chan[c.chan].vol<<4))|(ins->gb.envLen&7)|((ins->gb.envDir&1)<<3));
+          }
         }
       }
       break;
@@ -304,7 +340,7 @@ int DivPlatformGB::dispatch(DivCommand c) {
     case DIV_CMD_WAVE:
       if (c.chan!=2) break;
       chan[c.chan].wave=c.value;
-      updateWave();
+      ws.changeWave1(chan[c.chan].wave);
       chan[c.chan].keyOn=true;
       break;
     case DIV_CMD_NOTE_PORTA: {
@@ -334,25 +370,28 @@ int DivPlatformGB::dispatch(DivCommand c) {
       chan[c.chan].duty=c.value;
       if (c.chan!=2) {
         chan[c.chan].freqChanged=true;
-        rWrite(16+c.chan*5+1,((chan[c.chan].duty&3)<<6)|(63-(parent->getIns(chan[c.chan].ins)->gb.soundLen&63)));
+        rWrite(16+c.chan*5+1,((chan[c.chan].duty&3)<<6)|(63-(parent->getIns(chan[c.chan].ins,DIV_INS_GB)->gb.soundLen&63)));
       }
       break;
     case DIV_CMD_PANNING: {
       lastPan&=~(0x11<<c.chan);
-      if (c.value==0) c.value=0x11;
-      lastPan|=c.value<<c.chan;
+      int pan=0;
+      if (c.value>0) pan|=0x10;
+      if (c.value2>0) pan|=0x01;
+      if (pan==0) pan=0x11;
+      lastPan|=pan<<c.chan;
       rWrite(0x25,procMute());
       break;
     }
     case DIV_CMD_LEGATO:
       if (c.chan==3) break;
-      chan[c.chan].baseFreq=NOTE_PERIODIC(c.value+((chan[c.chan].std.willArp && !chan[c.chan].std.arpMode)?(chan[c.chan].std.arp):(0)));
+      chan[c.chan].baseFreq=NOTE_PERIODIC(c.value+((chan[c.chan].std.arp.will && !chan[c.chan].std.arp.mode)?(chan[c.chan].std.arp.val):(0)));
       chan[c.chan].freqChanged=true;
       chan[c.chan].note=c.value;
       break;
     case DIV_CMD_PRE_PORTA:
       if (chan[c.chan].active && c.value2) {
-        if (parent->song.resetMacroOnPorta) chan[c.chan].std.init(parent->getIns(chan[c.chan].ins));
+        if (parent->song.resetMacroOnPorta) chan[c.chan].macroInit(parent->getIns(chan[c.chan].ins,DIV_INS_GB));
       }
       chan[c.chan].inPorta=c.value;
       break;
@@ -394,6 +433,10 @@ void* DivPlatformGB::getChanState(int ch) {
   return &chan[ch];
 }
 
+DivDispatchOscBuffer* DivPlatformGB::getOscBuffer(int ch) {
+  return oscBuf[ch];
+}
+
 unsigned char* DivPlatformGB::getRegisterPool() {
   return regPool;
 }
@@ -405,7 +448,10 @@ int DivPlatformGB::getRegisterPoolSize() {
 void DivPlatformGB::reset() {
   for (int i=0; i<4; i++) {
     chan[i]=DivPlatformGB::Channel();
+    chan[i].std.setEngine(parent);
   }
+  ws.setEngine(parent);
+  ws.init(NULL,32,15,false);
   if (dumpWrites) {
     addWrite(0xffffffff,0);
   }
@@ -436,6 +482,7 @@ void DivPlatformGB::notifyInsChange(int ins) {
 
 void DivPlatformGB::notifyWaveChange(int wave) {
   if (chan[2].wave==wave) {
+    ws.changeWave1(wave);
     updateWave();
     if (!chan[2].keyOff) chan[2].keyOn=true;
   }
@@ -456,20 +503,25 @@ void DivPlatformGB::poke(std::vector<DivRegWrite>& wlist) {
 }
 
 int DivPlatformGB::init(DivEngine* p, int channels, int sugRate, unsigned int flags) {
+  chipClock=4194304;
+  rate=chipClock/16;
   for (int i=0; i<4; i++) {
     isMuted[i]=false;
+    oscBuf[i]=new DivDispatchOscBuffer;
+    oscBuf[i]->rate=rate;
   }
   parent=p;
   dumpWrites=false;
   skipRegisterWrites=false;
-  chipClock=4194304;
-  rate=chipClock/16;
   gb=new GB_gameboy_t;
   reset();
   return 4;
 }
 
 void DivPlatformGB::quit() {
+  for (int i=0; i<4; i++) {
+    delete oscBuf[i];
+  }
   delete gb;
 }
 

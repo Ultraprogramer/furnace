@@ -18,6 +18,7 @@
  */
 
 #include "taAudio.h"
+#include "../ta-log.h"
 
 void TAAudio::setSampleRateChangeCallback(void (*callback)(SampleRateChangeEvent)) {
   sampleRateChanged=callback;
@@ -55,4 +56,67 @@ bool TAAudio::init(TAAudioDesc& request, TAAudioDesc& response) {
 }
 
 TAAudio::~TAAudio() {
+}
+
+bool TAMidiIn::gather() {
+  return false;
+}
+
+bool TAMidiOut::send(const TAMidiMessage& what) {
+  logE("virtual method TAMidiOut::send() called! this is a bug!");
+  return false;
+}
+
+bool TAMidiIn::isDeviceOpen() {
+  return false;
+}
+
+bool TAMidiOut::isDeviceOpen() {
+  return false;
+}
+
+bool TAMidiIn::openDevice(String name) {
+  return false;
+}
+
+bool TAMidiOut::openDevice(String name) {
+  return false;
+}
+
+bool TAMidiIn::closeDevice() {
+  return false;
+}
+
+bool TAMidiOut::closeDevice() {
+  return false;
+}
+
+std::vector<String> TAMidiIn::listDevices() {
+  return std::vector<String>();
+}
+
+std::vector<String> TAMidiOut::listDevices() {
+  return std::vector<String>();
+}
+
+bool TAMidiIn::init() {
+  return false;
+}
+
+bool TAMidiOut::init() {
+  return false;
+}
+
+bool TAMidiIn::quit() {
+  return true;
+}
+
+bool TAMidiOut::quit() {
+  return true;
+}
+
+TAMidiIn::~TAMidiIn() {
+}
+
+TAMidiOut::~TAMidiOut() {
 }

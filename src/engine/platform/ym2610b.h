@@ -26,7 +26,7 @@
 
 #include "ym2610.h"
 
-class DivPlatformYM2610B: public DivDispatch {
+class DivPlatformYM2610B: public DivPlatformYM2610Base {
   protected:
     const unsigned short chanOffs[6]={
       0x00, 0x01, 0x02, 0x100, 0x101, 0x102
@@ -35,19 +35,26 @@ class DivPlatformYM2610B: public DivDispatch {
     struct Channel {
       DivInstrumentFM state;
       unsigned char freqH, freqL;
-      int freq, baseFreq, pitch, note;
-      unsigned char ins, psgMode, autoEnvNum, autoEnvDen;
+      int freq, baseFreq, pitch, pitch2, portaPauseFreq, note, ins;
+      unsigned char psgMode, autoEnvNum, autoEnvDen;
       signed char konCycles;
-      bool active, insChanged, freqChanged, keyOn, keyOff, portaPause, inPorta, furnacePCM;
+      bool active, insChanged, freqChanged, keyOn, keyOff, portaPause, inPorta, furnacePCM, hardReset;
       int vol, outVol;
+      int sample;
       unsigned char pan;
       DivMacroInt std;
+      void macroInit(DivInstrument* which) {
+        std.init(which);
+        pitch2=0;
+      }
       Channel():
         freqH(0),
         freqL(0),
         freq(0),
         baseFreq(0),
         pitch(0),
+        pitch2(0),
+        portaPauseFreq(0),
         note(0),
         ins(-1),
         psgMode(1),
@@ -61,11 +68,14 @@ class DivPlatformYM2610B: public DivDispatch {
         portaPause(false),
         inPorta(false),
         furnacePCM(false),
+        hardReset(false),
         vol(0),
         outVol(15),
+        sample(-1),
         pan(3) {}
     };
     Channel chan[16];
+    DivDispatchOscBuffer* oscBuf[16];
     bool isMuted[16];
     struct QueuedWrite {
       unsigned short addr;
@@ -76,16 +86,10 @@ class DivPlatformYM2610B: public DivDispatch {
     std::queue<QueuedWrite> writes;
     ymfm::ym2610b* fm;
     ymfm::ym2610b::output_data fmout;
-    DivYM2610Interface iface;
     unsigned char regPool[512];
     unsigned char lastBusy;
   
-    bool dacMode;
-    int dacPeriod;
-    int dacRate;
-    int dacPos;
-    int dacSample;
-    int ayNoiseFreq;
+    DivPlatformAY8910* ay;
     unsigned char sampleBank;
 
     int delay;
@@ -94,13 +98,8 @@ class DivPlatformYM2610B: public DivDispatch {
   
     short oldWrites[512];
     short pendingWrites[512];
-    unsigned char ayEnvMode;
-    unsigned short ayEnvPeriod;
-    short ayEnvSlideLow;
-    short ayEnvSlide;
 
-    int octave(int freq);
-    int toFreq(int freq);
+    double NOTE_OPNB(int ch, int note);
     double NOTE_ADPCMB(int note);
     friend void putDispatchChan(void*,int,int);
   
@@ -108,16 +107,18 @@ class DivPlatformYM2610B: public DivDispatch {
     void acquire(short* bufL, short* bufR, size_t start, size_t len);
     int dispatch(DivCommand c);
     void* getChanState(int chan);
+    DivDispatchOscBuffer* getOscBuffer(int chan);
     unsigned char* getRegisterPool();
     int getRegisterPoolSize();
     void reset();
     void forceIns();
-    void tick();
+    void tick(bool sysTick=true);
     void muteChannel(int ch, bool mute);
     bool isStereo();
     bool keyOffAffectsArp(int ch);
     void notifyInsChange(int ins);
     void notifyInsDeletion(void* ins);
+    void setSkipRegisterWrites(bool val);
     void poke(unsigned int addr, unsigned short val);
     void poke(std::vector<DivRegWrite>& wlist);
     const char** getRegisterSheet();

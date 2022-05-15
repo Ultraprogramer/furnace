@@ -24,6 +24,11 @@
 #include <stdint.h>
 #include "../ta-utils.h"
 
+enum Endianness {
+  LittleEndian=0,
+  BigEndian
+};
+
 class SafeReader;
 
 struct EndOfFileException {
@@ -61,6 +66,10 @@ class SafeReader {
     double readD_BE();
     String readString();
     String readString(size_t len);
+    String readStringLine();
+    String readStringToken(unsigned char delim);
+    String readStringToken();
+    inline bool isEOF() { return curSeek >= len; };
 
     SafeReader(void* b, size_t l):
       buf((unsigned char*)b),

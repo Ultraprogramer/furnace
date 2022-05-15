@@ -42,6 +42,7 @@ enum DivSystem {
   DIV_SYSTEM_PCE,
   DIV_SYSTEM_NES,
   DIV_SYSTEM_NES_VRC7, // ** COMPOUND SYSTEM - DO NOT USE! **
+  DIV_SYSTEM_NES_FDS, // ** COMPOUND SYSTEM - DO NOT USE! **
   DIV_SYSTEM_C64_6581,
   DIV_SYSTEM_C64_8580,
   DIV_SYSTEM_ARCADE, // ** COMPOUND SYSTEM - DO NOT USE! **
@@ -64,7 +65,9 @@ enum DivSystem {
   DIV_SYSTEM_MMC5,
   DIV_SYSTEM_N163,
   DIV_SYSTEM_OPN,
+  DIV_SYSTEM_OPN_EXT,
   DIV_SYSTEM_PC98,
+  DIV_SYSTEM_PC98_EXT,
   DIV_SYSTEM_OPL,
   DIV_SYSTEM_OPL2,
   DIV_SYSTEM_OPL3,
@@ -90,14 +93,67 @@ enum DivSystem {
   DIV_SYSTEM_OPLL_DRUMS,
   DIV_SYSTEM_LYNX,
   DIV_SYSTEM_QSOUND,
+  DIV_SYSTEM_VERA,
   DIV_SYSTEM_YM2610B_EXT,
-  DIV_SYSTEM_SEGAPCM_COMPAT
+  DIV_SYSTEM_SEGAPCM_COMPAT,
+  DIV_SYSTEM_X1_010,
+  DIV_SYSTEM_BUBSYS_WSG,
+  DIV_SYSTEM_OPL4,
+  DIV_SYSTEM_OPL4_DRUMS,
+  DIV_SYSTEM_ES5506,
+  DIV_SYSTEM_Y8950,
+  DIV_SYSTEM_Y8950_DRUMS,
+  DIV_SYSTEM_SCC_PLUS,
+  DIV_SYSTEM_SOUND_UNIT,
+  DIV_SYSTEM_MSM6295,
+  DIV_SYSTEM_MSM6258,
+  DIV_SYSTEM_DUMMY
+};
+
+struct DivSubSong {
+  String name, notes;
+  unsigned char hilightA, hilightB;
+  unsigned char timeBase, speed1, speed2, arpLen;
+  bool pal;
+  bool customTempo;
+  float hz;
+  int patLen, ordersLen;
+
+  DivOrders orders;
+  DivChannelData pat[DIV_MAX_CHANS];
+
+  bool chanShow[DIV_MAX_CHANS];
+  unsigned char chanCollapse[DIV_MAX_CHANS];
+  String chanName[DIV_MAX_CHANS];
+  String chanShortName[DIV_MAX_CHANS];
+
+  void clearData();
+
+  DivSubSong(): 
+    hilightA(4),
+    hilightB(16),
+    timeBase(0),
+    speed1(6),
+    speed2(6),
+    arpLen(1),
+    pal(true),
+    customTempo(false),
+    hz(60.0),
+    patLen(64),
+    ordersLen(1) {
+    for (int i=0; i<DIV_MAX_CHANS; i++) {
+      chanShow[i]=true;
+      chanCollapse[i]=0;
+    }
+  }
 };
 
 struct DivSong {
   // version number used for saving the song.
   // Furnace will save using the latest possible version,
   // known version numbers:
+  // - 26: v1.1.3
+  //   - changes height of FDS wave to 6-bit (it was 4-bit before)
   // - 25: v1.1
   //   - adds pattern names (in a rather odd way)
   //   - introduces SMS+OPLL system
@@ -137,12 +193,22 @@ struct DivSong {
   // - 9: v3.9
   //   - introduces Genesis system
   //   - introduces system number
+  //   - patterns now stored in current known format
+  // - 8: ???
+  //   - only used in the Medivo YMU cover
   // - 7: ???
-  // - 5: BETA 3 (?)
+  //   - only present in a later version of First.dmf
+  //   - pattern format changes: empty field is 0xFF instead of 0x80
+  //   - instrument now stored in pattern
+  // - 5: BETA 3
   //   - adds arpeggio tick
-  // - 3: BETA 2
+  // - 4: BETA 2
+  //   - possibly adds instrument number (stored in channel)?
+  //   - cannot confirm as I don't have any version 4 modules
+  // - 3: BETA 1
   //   - possibly the first version that could save
   //   - basic format, no system number, 16 instruments, one speed, YMU759-only
+  //   - patterns were stored in a different format (chars instead of shorts) and no instrument
   //   - if somebody manages to find a version 2 or even 1 module, please tell me as it will be worth more than a luxury vehicle
   unsigned short version;
   bool isDMF;
@@ -194,13 +260,21 @@ struct DivSong {
   //     - 6: 0.89MHz (Sunsoft 5B)
   //     - 7: 1.67MHz
   //     - 8: 0.83MHz (Sunsoft 5B on PAL)
+  //     - 9: 1.10MHz (Gamate/VIC-20 PAL)
+  //     - 10: 2.097152MHz (Game Boy)
+  //     - 11: 3.58MHz (Darky)
+  //     - 12: 3.6MHz (Darky)
   //   - bit 4-5: chip type (ignored on AY8930)
   //     - 0: AY-3-8910 or similar
   //     - 1: YM2149
   //     - 2: Sunsoft 5B
-  //   - bit 6: stereo
+  //     - 3: AY-3-8914
+  //   - bit 6: stereo (ignored on Sunsoft 5B)
   //     - 0: mono
   //     - 1: stereo ABC
+  //   - bit 7: clock divider pin (YM2149, AY8930)
+  //     - 0: high (disable divider)
+  //     - 1: low (internally divided to half)
   // - SAA1099:
   //   - bit 0-1: clock rate
   //     - 0: 8MHz (SAM Coupé, Game Blaster)
@@ -239,33 +313,44 @@ struct DivSong {
   //     - 2: YM2423
   //     - 3: VRC7
   //     - 4: custom (TODO)
+  // - X1-010:
+  //   - bit 0-3: clock rate
+  //     - 0: 16MHz (Seta 1)
+  //     - 1: 16.67MHz (Seta 2)
+  //   - bit 4: stereo
+  //     - 0: mono
+  //     - 1: stereo
   unsigned int systemFlags[32];
 
   // song information
   String name, author;
 
   // legacy song information
+  // those will be stored in .fur and mapped to VGM as:
+  // category -> game name
+  // writer -> ripper
+  // createdDate -> year
   String carrier, composer, vendor, category, writer, arranger, copyright, manGroup, manInfo, createdDate, revisionDate;
 
+  // more VGM specific stuff
+  String nameJ, authorJ, categoryJ;
+
   // other things
-  String chanName[DIV_MAX_CHANS];
-  String chanShortName[DIV_MAX_CHANS];
   String notes;
 
-  // highlight
-  unsigned char hilightA, hilightB;
-
   // module details
-  unsigned char timeBase, speed1, speed2, arpLen;
-  bool pal;
-  bool customTempo;
-  int hz, patLen, ordersLen, insLen, waveLen, sampleLen;
+  int insLen, waveLen, sampleLen;
   float masterVol;
   float tuning;
 
   // compatibility flags
   bool limitSlides;
-  bool linearPitch;
+  // linear pitch
+  // 0: not linear
+  // 1: only pitch changes (04xy/E5xx) linear
+  // 2: full linear
+  unsigned char linearPitch;
+  unsigned char pitchSlideSpeed;
   // loop behavior
   // 0: reset on loop
   // 1: fake reset on loop
@@ -284,20 +369,58 @@ struct DivSong {
   bool ignoreDuplicateSlides;
   bool stopPortaOnNoteOff;
   bool continuousVibrato;
+  bool brokenDACMode;
+  bool oneTickCut;
+  bool newInsTriggersInPorta;
+  bool arp0Reset;
+  bool brokenSpeedSel;
+  bool noSlidesOnFirstTick;
+  bool rowResetsArpPos;
+  bool ignoreJumpAtEnd;
+  bool buggyPortaAfterSlide;
+  bool gbInsAffectsEnvelope;
+  bool sharedExtStat;
+  bool ignoreDACModeOutsideIntendedChannel;
+  bool e1e2AlsoTakePriority;
+  bool newSegaPCM;
+  bool fbPortaPause;
+  bool snDutyReset;
+  bool pitchMacroIsLinear;
 
-  DivOrders orders;
   std::vector<DivInstrument*> ins;
-  DivChannelData pat[DIV_MAX_CHANS];
   std::vector<DivWavetable*> wave;
   std::vector<DivSample*> sample;
 
-  bool chanShow[DIV_MAX_CHANS];
-  bool chanCollapse[DIV_MAX_CHANS];
+  std::vector<DivSubSong*> subsong;
 
-  DivInstrument nullIns;
+  DivInstrument nullIns, nullInsOPLL, nullInsOPL, nullInsQSound;
   DivWavetable nullWave;
   DivSample nullSample;
 
+  /**
+   * clear orders and patterns.
+   */
+  void clearSongData();
+
+  /**
+   * clear instruments.
+   */
+  void clearInstruments();
+
+  /**
+   * clear wavetables.
+   */
+  void clearWavetables();
+
+  /**
+   * clear samples.
+   */
+  void clearSamples();
+
+  /**
+   * unloads the song, freeing all memory associated with it.
+   * use before destroying the object.
+   */
   void unload();
 
   DivSong():
@@ -317,24 +440,14 @@ struct DivSong {
     manInfo(""),
     createdDate(""),
     revisionDate(""),
-    hilightA(4),
-    hilightB(16),
-    timeBase(0),
-    speed1(6),
-    speed2(6),
-    arpLen(1),
-    pal(true),
-    customTempo(false),
-    hz(60),
-    patLen(64),
-    ordersLen(1),
     insLen(0),
     waveLen(0),
     sampleLen(0),
     masterVol(1.0f),
     tuning(440.0f),
     limitSlides(false),
-    linearPitch(true),
+    linearPitch(2),
+    pitchSlideSpeed(4),
     loopModality(0),
     properNoiseLayout(false),
     waveDutyIsVol(false),
@@ -348,19 +461,78 @@ struct DivSong {
     brokenShortcutSlides(false),
     ignoreDuplicateSlides(false),
     stopPortaOnNoteOff(false),
-    continuousVibrato(false) {
+    continuousVibrato(false),
+    brokenDACMode(false),
+    oneTickCut(false),
+    newInsTriggersInPorta(true),
+    arp0Reset(true),
+    brokenSpeedSel(false),
+    noSlidesOnFirstTick(false),
+    rowResetsArpPos(false),
+    ignoreJumpAtEnd(false),
+    buggyPortaAfterSlide(false),
+    gbInsAffectsEnvelope(true),
+    sharedExtStat(true),
+    ignoreDACModeOutsideIntendedChannel(false),
+    e1e2AlsoTakePriority(false),
+    newSegaPCM(true),
+    fbPortaPause(false),
+    snDutyReset(false),
+    pitchMacroIsLinear(true) {
     for (int i=0; i<32; i++) {
       system[i]=DIV_SYSTEM_NULL;
       systemVol[i]=64;
       systemPan[i]=0;
       systemFlags[i]=0;
     }
-    for (int i=0; i<DIV_MAX_CHANS; i++) {
-      chanShow[i]=true;
-      chanCollapse[i]=false;
-    }
+    subsong.push_back(new DivSubSong);
     system[0]=DIV_SYSTEM_YM2612;
     system[1]=DIV_SYSTEM_SMS;
+
+    // OPLL default instrument contest winner - piano_guitar_idk by Weeppiko
+    nullInsOPLL.fm.opllPreset=0;
+    nullInsOPLL.fm.alg=0;
+    nullInsOPLL.fm.fb=7;
+    nullInsOPLL.fm.fms=1;
+    nullInsOPLL.fm.ams=0;
+    nullInsOPLL.fm.op[0].ar=15;
+    nullInsOPLL.fm.op[0].dr=5;
+    nullInsOPLL.fm.op[0].sl=3;
+    nullInsOPLL.fm.op[0].rr=3;
+    nullInsOPLL.fm.op[0].tl=40;
+    nullInsOPLL.fm.op[0].ksl=0;
+    nullInsOPLL.fm.op[0].mult=5;
+    nullInsOPLL.fm.op[0].am=0;
+    nullInsOPLL.fm.op[0].vib=1;
+    nullInsOPLL.fm.op[0].ksr=0;
+    nullInsOPLL.fm.op[0].ssgEnv=8;
+    nullInsOPLL.fm.op[1].ar=15;
+    nullInsOPLL.fm.op[1].dr=1;
+    nullInsOPLL.fm.op[1].sl=11;
+    nullInsOPLL.fm.op[1].rr=6;
+    nullInsOPLL.fm.op[1].tl=0;
+    nullInsOPLL.fm.op[1].ksl=0;
+    nullInsOPLL.fm.op[1].mult=1;
+    nullInsOPLL.fm.op[1].am=0;
+    nullInsOPLL.fm.op[1].vib=0;
+    nullInsOPLL.fm.op[1].ksr=0;
+    nullInsOPLL.fm.op[1].ssgEnv=8;
+    nullInsOPLL.name="This is a bug! Report!";
+
+    nullInsOPL.fm.alg=0;
+    nullInsOPL.fm.fb=7;
+    nullInsOPL.fm.op[0].dr=2;
+    nullInsOPL.fm.op[0].rr=7;
+    nullInsOPL.fm.op[0].tl=22;
+    nullInsOPL.fm.op[0].ksl=1;
+    nullInsOPL.fm.op[0].mult=3;
+    nullInsOPL.fm.op[1].tl=0;
+    nullInsOPL.fm.op[1].dr=3;
+    nullInsOPL.fm.op[1].rr=12;
+    nullInsOPL.fm.op[1].mult=1;
+    nullInsOPL.name="This is a bug! Report!";
+
+    nullInsQSound.std.panLMacro.mode=true;
   }
 };
 
