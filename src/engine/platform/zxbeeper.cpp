@@ -29,30 +29,42 @@ const char** DivPlatformZXBeeper::getRegisterSheet() {
 
 const char* DivPlatformZXBeeper::getEffectName(unsigned char effect) {
   switch (effect) {
-    case 0x10:
-      return "10xx: Change waveform";
-      break;
-    case 0x11:
-      return "11xx: Toggle noise mode";
-      break;
     case 0x12:
-      return "12xx: Setup LFO (0: disabled; 1: 1x depth; 2: 16x depth; 3: 256x depth)";
-      break;
-    case 0x13:
-      return "13xx: Set LFO speed";
+      return "12xx: Set pulse width";
       break;
     case 0x17:
-      return "17xx: Toggle PCM mode";
+      return "17xx: Trigger overlay drum";
       break;
   }
   return NULL;
 }
 
 void DivPlatformZXBeeper::acquire(short* bufL, short* bufR, size_t start, size_t len) {
+  bool o=false;
   for (size_t h=start; h<start+len; h++) {
     // clock here
-    bool o=false;
+    if (curSample>=0 && curSample<parent->song.sampleLen) {
+      if (--curSamplePeriod<0) {
+        DivSample* s=parent->getSample(curSample);
+        if (s->samples>0) {
+          sampleOut=(s->data8[curSamplePos++]>0);
+          if (curSamplePos>=s->samples) curSample=-1;
+          // 256 bits
+          if (curSamplePos>2047) curSample=-1;
+          
+          curSamplePeriod=15;
+        } else {
+          curSample=-1;
+        }
+      }
+      o=sampleOut;
+      bufL[h]=o?16384:0;
+      oscBuf[0]->data[oscBuf[0]->needle++]=o?16384:-16384;
+      continue;
+    }
+
     unsigned short oldPos=chan[curChan].sPosition;
+    o=false;
 
     if (sOffTimer) {
       sOffTimer--;
@@ -65,6 +77,7 @@ void DivPlatformZXBeeper::acquire(short* bufL, short* bufR, size_t start, size_t
     if (++curChan>=6) curChan=0;
     
     bufL[h]=o?16384:0;
+    oscBuf[0]->data[oscBuf[0]->needle++]=o?16384:-16384;
   }
 }
 
@@ -96,7 +109,7 @@ void DivPlatformZXBeeper::tick(bool sysTick) {
     if (chan[i].std.pitch.had) {
       if (chan[i].std.pitch.mode) {
         chan[i].pitch2+=chan[i].std.pitch.val;
-        CLAMP_VAR(chan[i].pitch2,-2048,2048);
+        CLAMP_VAR(chan[i].pitch2,-32768,32767);
       } else {
         chan[i].pitch2=chan[i].std.pitch.val;
       }
@@ -104,7 +117,7 @@ void DivPlatformZXBeeper::tick(bool sysTick) {
     }
     if (chan[i].freqChanged || chan[i].keyOn || chan[i].keyOff) {
       if (chan[i].active) {
-        chan[i].freq=parent->calcFreq(chan[i].baseFreq,chan[i].pitch,false,0,chan[i].pitch2,chipClock,CHIP_FREQBASE);
+        chan[i].freq=parent->calcFreq(chan[i].baseFreq,chan[i].pitch,false,2,chan[i].pitch2,chipClock,CHIP_FREQBASE);
         if (chan[i].freq>65535) chan[i].freq=65535;
       }
       if (chan[i].keyOn) {
@@ -137,9 +150,7 @@ int DivPlatformZXBeeper::dispatch(DivCommand c) {
       break;
     }
     case DIV_CMD_NOTE_OFF:
-      chan[c.chan].dacSample=-1;
       if (dumpWrites) addWrite(0xffff0002+(c.chan<<8),0);
-      chan[c.chan].pcm=false;
       chan[c.chan].active=false;
       chan[c.chan].keyOff=true;
       chan[c.chan].macroInit(NULL);
@@ -199,13 +210,10 @@ int DivPlatformZXBeeper::dispatch(DivCommand c) {
       chan[c.chan].duty=c.value;
       break;
     case DIV_CMD_SAMPLE_MODE:
-      chan[c.chan].pcm=c.value;
-      break;
-    case DIV_CMD_SAMPLE_BANK:
-      sampleBank=c.value;
-      if (sampleBank>(parent->song.sample.size()/12)) {
-        sampleBank=parent->song.sample.size()/12;
-      }
+      if (isMuted[c.chan]) break;
+      curSample=c.value;
+      curSamplePos=0;
+      curSamplePeriod=0;
       break;
     case DIV_CMD_LEGATO:
       chan[c.chan].baseFreq=NOTE_FREQUENCY(c.value+((chan[c.chan].std.arp.will && !chan[c.chan].std.arp.mode)?(chan[c.chan].std.arp.val):(0)));
@@ -245,8 +253,12 @@ void* DivPlatformZXBeeper::getChanState(int ch) {
   return &chan[ch];
 }
 
+DivMacroInt* DivPlatformZXBeeper::getChanMacroInt(int ch) {
+  return &chan[ch].std;
+}
+
 DivDispatchOscBuffer* DivPlatformZXBeeper::getOscBuffer(int ch) {
-  return oscBuf[ch];
+  return (ch<1)?oscBuf[ch]:NULL;
 }
 
 unsigned char* DivPlatformZXBeeper::getRegisterPool() {
@@ -274,8 +286,11 @@ void DivPlatformZXBeeper::reset() {
   cycles=0;
   curChan=0;
   sOffTimer=0;
-  sampleBank=0;
   ulaOut=0;
+  curSample=-1;
+  curSamplePos=0;
+  curSamplePeriod=0;
+  sampleOut=false;
 }
 
 bool DivPlatformZXBeeper::keyOffAffectsArp(int ch) {

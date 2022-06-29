@@ -242,7 +242,7 @@ void DivPlatformAY8930::tick(bool sysTick) {
     if (chan[i].std.pitch.had) {
       if (chan[i].std.pitch.mode) {
         chan[i].pitch2+=chan[i].std.pitch.val;
-        CLAMP_VAR(chan[i].pitch2,-2048,2048);
+        CLAMP_VAR(chan[i].pitch2,-32768,32767);
       } else {
         chan[i].pitch2=chan[i].std.pitch.val;
       }
@@ -346,6 +346,9 @@ int DivPlatformAY8930::dispatch(DivCommand c) {
       chan[c.chan].active=true;
       chan[c.chan].keyOn=true;
       chan[c.chan].macroInit(ins);
+      if (!parent->song.brokenOutVol && !chan[c.chan].std.vol.will) {
+        chan[c.chan].outVol=chan[c.chan].vol;
+      }
       if (isMuted[c.chan]) {
         rWrite(0x08+c.chan,0);
       } else {
@@ -518,7 +521,7 @@ void DivPlatformAY8930::muteChannel(int ch, bool mute) {
   isMuted[ch]=mute;
   if (isMuted[ch]) {
     rWrite(0x08+ch,0);
-  } else {
+  } else if (chan[ch].active) {
     rWrite(0x08+ch,(chan[ch].outVol&31)|((chan[ch].psgMode&4)<<3));
   }
 }
@@ -534,6 +537,10 @@ void DivPlatformAY8930::forceIns() {
 
 void* DivPlatformAY8930::getChanState(int ch) {
   return &chan[ch];
+}
+
+DivMacroInt* DivPlatformAY8930::getChanMacroInt(int ch) {
+  return &chan[ch].std;
 }
 
 DivDispatchOscBuffer* DivPlatformAY8930::getOscBuffer(int ch) {

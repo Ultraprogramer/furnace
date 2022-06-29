@@ -19,19 +19,26 @@
 
 #ifndef _GENESIS_H
 #define _GENESIS_H
-#include "../dispatch.h"
-#include <deque>
+#include "fmshared_OPN.h"
+#include "../macroInt.h"
 #include "../../../extern/Nuked-OPN2/ym3438.h"
 #include "sound/ymfm/ymfm_opn.h"
 
-#include "sms.h"
 
 class DivYM2612Interface: public ymfm::ymfm_interface {
 
 };
 
-class DivPlatformGenesis: public DivDispatch {
+class DivPlatformGenesis: public DivPlatformOPN {
   protected:
+    const unsigned short chanOffs[6]={
+      0x00, 0x01, 0x02, 0x100, 0x101, 0x102
+    };
+
+    const unsigned char konOffs[6]={
+      0, 1, 2, 4, 5, 6
+    };
+
     struct Channel {
       DivInstrumentFM state;
       DivMacroInt std;
@@ -41,6 +48,17 @@ class DivPlatformGenesis: public DivDispatch {
       bool active, insChanged, freqChanged, keyOn, keyOff, portaPause, furnaceDac, inPorta, hardReset;
       int vol, outVol;
       unsigned char pan;
+
+      bool dacMode;
+      int dacPeriod;
+      int dacRate;
+      unsigned int dacPos;
+      int dacSample;
+      int dacDelay;
+      bool dacReady;
+      bool dacDirection;
+      unsigned char sampleBank;
+      signed char dacOutput;
       void macroInit(DivInstrument* which) {
         std.init(which);
         pitch2=0;
@@ -65,45 +83,40 @@ class DivPlatformGenesis: public DivDispatch {
         inPorta(false),
         hardReset(false),
         vol(0),
-        pan(3) {}
+        outVol(0),
+        pan(3),
+        dacMode(false),
+        dacPeriod(0),
+        dacRate(0),
+        dacPos(0),
+        dacSample(-1),
+        dacDelay(0),
+        dacReady(true),
+        dacDirection(false),
+        sampleBank(0),
+        dacOutput(0) {}
     };
     Channel chan[10];
     DivDispatchOscBuffer* oscBuf[10];
     bool isMuted[10];
-    struct QueuedWrite {
-      unsigned short addr;
-      unsigned char val;
-      bool addrOrVal;
-      QueuedWrite(unsigned short a, unsigned char v): addr(a), val(v), addrOrVal(false) {}
-    };
-    std::deque<QueuedWrite> writes;
     ym3438_t fm;
-    int delay;
-    unsigned char lastBusy;
 
     ymfm::ym2612* fm_ymfm;
     ymfm::ym2612::output_data out_ymfm;
     DivYM2612Interface iface;
-    unsigned char regPool[512];
   
-    bool dacMode;
-    int dacPeriod;
-    int dacRate;
-    unsigned int dacPos;
-    int dacSample;
-    int dacDelay;
-    bool dacReady;
-    unsigned char sampleBank;
     unsigned char lfoValue;
 
-    bool extMode, useYMFM;
+    int softPCMTimer;
+
+    bool extMode, softPCM, useYMFM;
     bool ladder;
   
-    short oldWrites[512];
-    short pendingWrites[512];
+    unsigned char dacVolTable[128];
 
     friend void putDispatchChan(void*,int,int);
 
+    inline void processDAC();
     void acquire_nuked(short* bufL, short* bufR, size_t start, size_t len);
     void acquire_ymfm(short* bufL, short* bufR, size_t start, size_t len);
   
@@ -111,6 +124,7 @@ class DivPlatformGenesis: public DivDispatch {
     void acquire(short* bufL, short* bufR, size_t start, size_t len);
     int dispatch(DivCommand c);
     void* getChanState(int chan);
+    DivMacroInt* getChanMacroInt(int ch);
     DivDispatchOscBuffer* getOscBuffer(int chan);
     unsigned char* getRegisterPool();
     int getRegisterPoolSize();
@@ -126,12 +140,15 @@ class DivPlatformGenesis: public DivDispatch {
     void setFlags(unsigned int flags);
     void notifyInsChange(int ins);
     void notifyInsDeletion(void* ins);
+    void setSoftPCM(bool value);
     int getPortaFloor(int ch);
     void poke(unsigned int addr, unsigned short val);
     void poke(std::vector<DivRegWrite>& wlist);
     const char* getEffectName(unsigned char effect);
     int init(DivEngine* parent, int channels, int sugRate, unsigned int flags);
     void quit();
+    DivPlatformGenesis():
+      DivPlatformOPN(9440540.0, 72, 32) {}
     ~DivPlatformGenesis();
 };
 #endif

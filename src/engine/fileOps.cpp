@@ -166,6 +166,12 @@ bool DivEngine::loadDMF(unsigned char* file, size_t len) {
     ds.e1e2AlsoTakePriority=true;
     ds.fbPortaPause=true;
     ds.snDutyReset=true;
+    ds.oldOctaveBoundary=false;
+    ds.noOPN2Vol=true;
+    ds.newVolumeScaling=false;
+    ds.volMacroLinger=false;
+    ds.brokenOutVol=true; // ???
+    ds.e1e2StopOnSameNote=true;
 
     // 1.1 compat flags
     if (ds.version>24) {
@@ -307,19 +313,19 @@ bool DivEngine::loadDMF(unsigned char* file, size_t len) {
     logI("reading instruments (%d)...",ds.insLen);
     for (int i=0; i<ds.insLen; i++) {
       DivInstrument* ins=new DivInstrument;
+      unsigned char mode=0;
       if (ds.version>0x05) {
         ins->name=reader.readString((unsigned char)reader.readC());
       }
       logD("%d name: %s",i,ins->name.c_str());
       if (ds.version<0x0b) {
         // instruments in ancient versions were all FM or STD.
-        ins->mode=1;
+        mode=1;
       } else {
-        unsigned char mode=reader.readC();
+        mode=reader.readC();
         if (mode>1) logW("%d: invalid instrument mode %d!",i,mode);
-        ins->mode=mode;
       }
-      ins->type=ins->mode?DIV_INS_FM:DIV_INS_STD;
+      ins->type=mode?DIV_INS_FM:DIV_INS_STD;
       if (ds.system[0]==DIV_SYSTEM_GB) {
         ins->type=DIV_INS_GB;
       }
@@ -329,7 +335,7 @@ bool DivEngine::loadDMF(unsigned char* file, size_t len) {
       if (ds.system[0]==DIV_SYSTEM_YM2610 || ds.system[0]==DIV_SYSTEM_YM2610_EXT
        || ds.system[0]==DIV_SYSTEM_YM2610_FULL || ds.system[0]==DIV_SYSTEM_YM2610_FULL_EXT
        || ds.system[0]==DIV_SYSTEM_YM2610B || ds.system[0]==DIV_SYSTEM_YM2610B_EXT) {
-        if (!ins->mode) {
+        if (!mode) {
           ins->type=DIV_INS_AY;
         }
       }
@@ -343,7 +349,7 @@ bool DivEngine::loadDMF(unsigned char* file, size_t len) {
         ins->type=DIV_INS_OPL;
       }
 
-      if (ins->mode) { // FM
+      if (mode) { // FM
         if (ds.version>0x05) {
           ins->fm.alg=reader.readC();
           if (ds.version<0x13) {
@@ -1027,6 +1033,20 @@ bool DivEngine::loadFur(unsigned char* file, size_t len) {
     if (ds.version<90) {
       ds.pitchMacroIsLinear=false;
     }
+    if (ds.version<97) {
+      ds.oldOctaveBoundary=true;
+    }
+    if (ds.version<97) { // actually should be 98 but yky uses this feature ahead of time
+      ds.noOPN2Vol=true;
+    }
+    if (ds.version<99) {
+      ds.newVolumeScaling=false;
+      ds.volMacroLinger=false;
+      ds.brokenOutVol=true;
+    }
+    if (ds.version<100) {
+      ds.e1e2StopOnSameNote=false;
+    }
     ds.isDMF=false;
 
     reader.readS(); // reserved
@@ -1404,9 +1424,41 @@ bool DivEngine::loadFur(unsigned char* file, size_t len) {
       } else {
         reader.readC();
       }
-      for (int i=0; i<18; i++) {
+      if (ds.version>=97) {
+        ds.oldOctaveBoundary=reader.readC();
+      } else {
         reader.readC();
       }
+      if (ds.version>=98) {
+        ds.noOPN2Vol=reader.readC();
+      } else {
+        reader.readC();
+      }
+      if (ds.version>=99) {
+        ds.newVolumeScaling=reader.readC();
+        ds.volMacroLinger=reader.readC();
+        ds.brokenOutVol=reader.readC();
+      } else {
+        reader.readC();
+        reader.readC();
+        reader.readC();
+      }
+      if (ds.version>=100) {
+        ds.e1e2StopOnSameNote=reader.readC();
+      } else {
+        reader.readC();
+      }
+      for (int i=0; i<8; i++) {
+        reader.readC();
+      }
+    }
+
+    // first song virtual tempo
+    if (ds.version>=96) {
+      subSong->virtualTempoN=reader.readS();
+      subSong->virtualTempoD=reader.readS();
+    } else {
+      reader.readI();
     }
 
     // subsongs
@@ -1457,7 +1509,12 @@ bool DivEngine::loadFur(unsigned char* file, size_t len) {
         subSong->hilightA=reader.readC();
         subSong->hilightB=reader.readC();
 
-        reader.readI(); // reserved
+        if (ds.version>=96) {
+          subSong->virtualTempoN=reader.readS();
+          subSong->virtualTempoD=reader.readS();
+        } else {
+          reader.readI();
+        }
 
         subSong->name=reader.readString();
         subSong->notes=reader.readString();
@@ -2648,7 +2705,7 @@ SafeWriter* DivEngine::saveFur(bool notPrimary) {
   std::vector<int> wavePtr;
   std::vector<int> samplePtr;
   std::vector<int> patPtr;
-  size_t ptrSeek, subSongPtrSeek;
+  size_t ptrSeek, subSongPtrSeek, blockStartSeek, blockEndSeek;
   size_t subSongIndex=0;
   DivSubSong* subSong=song.subsong[subSongIndex];
   warnings="";
@@ -2669,16 +2726,19 @@ SafeWriter* DivEngine::saveFur(bool notPrimary) {
   if (song.ins.size()>256) {
     logE("maximum number of instruments is 256!");
     lastError="maximum number of instruments is 256";
+    saveLock.unlock();
     return NULL;
   }
   if (song.wave.size()>256) {
     logE("maximum number of wavetables is 256!");
     lastError="maximum number of wavetables is 256";
+    saveLock.unlock();
     return NULL;
   }
   if (song.sample.size()>256) {
     logE("maximum number of samples is 256!");
     lastError="maximum number of samples is 256";
+    saveLock.unlock();
     return NULL;
   }
 
@@ -2724,6 +2784,7 @@ SafeWriter* DivEngine::saveFur(bool notPrimary) {
 
   /// SONG INFO
   w->write("INFO",4);
+  blockStartSeek=w->tell();
   w->writeI(0);
 
   w->writeC(subSong->timeBase);
@@ -2855,9 +2916,19 @@ SafeWriter* DivEngine::saveFur(bool notPrimary) {
   w->writeC(song.snDutyReset);
   w->writeC(song.pitchMacroIsLinear);
   w->writeC(song.pitchSlideSpeed);
-  for (int i=0; i<18; i++) {
+  w->writeC(song.oldOctaveBoundary);
+  w->writeC(song.noOPN2Vol);
+  w->writeC(song.newVolumeScaling);
+  w->writeC(song.volMacroLinger);
+  w->writeC(song.brokenOutVol);
+  w->writeC(song.e1e2StopOnSameNote);
+  for (int i=0; i<8; i++) {
     w->writeC(0);
   }
+
+  // first subsong virtual tempo
+  w->writeS(subSong->virtualTempoN);
+  w->writeS(subSong->virtualTempoD);
   
   // subsong list
   w->writeString(subSong->name,false);
@@ -2872,11 +2943,17 @@ SafeWriter* DivEngine::saveFur(bool notPrimary) {
     w->writeI(0);
   }
 
+  blockEndSeek=w->tell();
+  w->seek(blockStartSeek,SEEK_SET);
+  w->writeI(blockEndSeek-blockStartSeek-4);
+  w->seek(0,SEEK_END);
+
   /// SUBSONGS
   for (subSongIndex=1; subSongIndex<song.subsong.size(); subSongIndex++) {
     subSong=song.subsong[subSongIndex];
     subSongPtr.push_back(w->tell());
     w->write("SONG",4);
+    blockStartSeek=w->tell();
     w->writeI(0);
 
     w->writeC(subSong->timeBase);
@@ -2888,7 +2965,8 @@ SafeWriter* DivEngine::saveFur(bool notPrimary) {
     w->writeS(subSong->ordersLen);
     w->writeC(subSong->hilightA);
     w->writeC(subSong->hilightB);
-    w->writeI(0); // reserved
+    w->writeS(subSong->virtualTempoN);
+    w->writeS(subSong->virtualTempoD);
 
     w->writeString(subSong->name,false);
     w->writeString(subSong->notes,false);
@@ -2918,6 +2996,11 @@ SafeWriter* DivEngine::saveFur(bool notPrimary) {
     for (int i=0; i<chans; i++) {
       w->writeString(subSong->chanShortName[i],false);
     }
+
+    blockEndSeek=w->tell();
+    w->seek(blockStartSeek,SEEK_SET);
+    w->writeI(blockEndSeek-blockStartSeek-4);
+    w->seek(0,SEEK_END);
   }
 
   /// INSTRUMENT
@@ -2939,6 +3022,7 @@ SafeWriter* DivEngine::saveFur(bool notPrimary) {
     DivSample* sample=song.sample[i];
     samplePtr.push_back(w->tell());
     w->write("SMPL",4);
+    blockStartSeek=w->tell();
     w->writeI(0);
 
     w->writeString(sample->name,false);
@@ -2951,6 +3035,11 @@ SafeWriter* DivEngine::saveFur(bool notPrimary) {
     w->writeI(sample->loopStart);
 
     w->write(sample->getCurBuf(),sample->getCurBufLen());
+
+    blockEndSeek=w->tell();
+    w->seek(blockStartSeek,SEEK_SET);
+    w->writeI(blockEndSeek-blockStartSeek-4);
+    w->seek(0,SEEK_END);
   }
 
   /// PATTERN
@@ -2958,6 +3047,7 @@ SafeWriter* DivEngine::saveFur(bool notPrimary) {
     DivPattern* pat=song.subsong[i.subsong]->pat[i.chan].getPattern(i.pat,false);
     patPtr.push_back(w->tell());
     w->write("PATR",4);
+    blockStartSeek=w->tell();
     w->writeI(0);
 
     w->writeS(i.chan);
@@ -2975,6 +3065,11 @@ SafeWriter* DivEngine::saveFur(bool notPrimary) {
     }
 
     w->writeString(pat->name,false);
+
+    blockEndSeek=w->tell();
+    w->seek(blockStartSeek,SEEK_SET);
+    w->writeI(blockEndSeek-blockStartSeek-4);
+    w->seek(0,SEEK_END);
   }
 
   /// POINTERS
@@ -3168,6 +3263,14 @@ SafeWriter* DivEngine::saveDMF(unsigned char version) {
     addWarning("only the currently selected subsong will be saved");
   }
 
+  if (curSubSong->virtualTempoD!=curSubSong->virtualTempoN) {
+    addWarning(".dmf format does not support virtual tempo");
+  }
+
+  if (song.tuning<439.99 && song.tuning>440.01) {
+    addWarning(".dmf format does not support tuning");
+  }
+
   if (sys==DIV_SYSTEM_C64_6581 || sys==DIV_SYSTEM_C64_8580) {
     addWarning("absolute duty/cutoff macro not available in .dmf!");
     addWarning("duty precision will be lost");
@@ -3192,15 +3295,15 @@ SafeWriter* DivEngine::saveDMF(unsigned char version) {
     w->writeString(i->name,true);
 
     // safety check
-    if (!isFMSystem(sys) && i->mode) {
-      i->mode=0;
+    if (!isFMSystem(sys) && i->type!=DIV_INS_STD && i->type!=DIV_INS_FDS) {
+      i->type=DIV_INS_STD;
     }
-    if (!isSTDSystem(sys) && i->mode==0) {
-      i->mode=1;
+    if (!isSTDSystem(sys) && i->type!=DIV_INS_FM) {
+      i->type=DIV_INS_FM;
     }
 
-    w->writeC(i->mode);
-    if (i->mode) { // FM
+    w->writeC((i->type==DIV_INS_FM || i->type==DIV_INS_OPLL)?1:0);
+    if (i->type==DIV_INS_FM || i->type==DIV_INS_OPLL) { // FM
       w->writeC(i->fm.alg);
       w->writeC(i->fm.fb);
       w->writeC(i->fm.fms);

@@ -21,8 +21,8 @@
 #include "../engine.h"
 #include <math.h>
 
-#include "ym2610shared.h"
-#include "fmshared_OPN.h"
+#define CHIP_FREQBASE fmFreqBase
+#define CHIP_DIVIDER fmDivBase
 
 int DivPlatformYM2203Ext::dispatch(DivCommand c) {
   if (c.chan<2) {
@@ -34,6 +34,10 @@ int DivPlatformYM2203Ext::dispatch(DivCommand c) {
   }
   int ch=c.chan-2;
   int ordch=orderedOps[ch];
+  if (!extMode) {
+    c.chan=2;
+    return DivPlatformYM2203::dispatch(c);
+  }
   switch (c.cmd) {
     case DIV_CMD_NOTE_ON: {
       DivInstrument* ins=parent->getIns(opChan[ch].ins,DIV_INS_FM);
@@ -45,7 +49,7 @@ int DivPlatformYM2203Ext::dispatch(DivCommand c) {
         rWrite(baseAddr+0x40,127);
       } else {
         if (opChan[ch].insChanged) {
-          rWrite(baseAddr+0x40,127-(((127-op.tl)*(opChan[ch].vol&0x7f))/127));
+          rWrite(baseAddr+0x40,127-VOL_SCALE_LOG(127-op.tl,opChan[ch].vol&0x7f,127));
         }
       }
       if (opChan[ch].insChanged) {
@@ -63,7 +67,7 @@ int DivPlatformYM2203Ext::dispatch(DivCommand c) {
       opChan[ch].insChanged=false;
 
       if (c.value!=DIV_NOTE_NULL) {
-        opChan[ch].baseFreq=NOTE_FREQUENCY(c.value);
+        opChan[ch].baseFreq=NOTE_FNUM_BLOCK(c.value,11);
         opChan[ch].portaPause=false;
         opChan[ch].freqChanged=true;
       }
@@ -84,7 +88,7 @@ int DivPlatformYM2203Ext::dispatch(DivCommand c) {
       if (isOpMuted[ch]) {
         rWrite(baseAddr+0x40,127);
       } else {
-        rWrite(baseAddr+0x40,127-(((127-op.tl)*(opChan[ch].vol&0x7f))/127));
+        rWrite(baseAddr+0x40,127-VOL_SCALE_LOG(127-op.tl,opChan[ch].vol&0x7f,127));
       }
       break;
     }
@@ -143,61 +147,26 @@ int DivPlatformYM2203Ext::dispatch(DivCommand c) {
         }
         break;
       }
-      int boundaryBottom=parent->calcBaseFreq(chipClock,CHIP_FREQBASE,0,false);
-      int boundaryTop=parent->calcBaseFreq(chipClock,CHIP_FREQBASE,12,false);
-      int destFreq=NOTE_FNUM_BLOCK(c.value2,11);
-      int newFreq;
-      bool return2=false;
-      if (opChan[ch].portaPause) {
-        opChan[ch].baseFreq=opChan[ch].portaPauseFreq;
-      }
-      if (destFreq>opChan[ch].baseFreq) {
-        newFreq=opChan[ch].baseFreq+c.value;
-        if (newFreq>=destFreq) {
-          newFreq=destFreq;
-          return2=true;
-        }
-      } else {
-        newFreq=opChan[ch].baseFreq-c.value;
-        if (newFreq<=destFreq) {
-          newFreq=destFreq;
-          return2=true;
-        }
-      }
-      // what the heck!
-      if (!opChan[ch].portaPause) {
-        if ((newFreq&0x7ff)>boundaryTop && (newFreq&0xf800)<0x3800) {
-          if (parent->song.fbPortaPause) {
-            opChan[ch].portaPauseFreq=(boundaryBottom)|((newFreq+0x800)&0xf800);
-            opChan[ch].portaPause=true;
-            break;
-          } else {
-            newFreq=(newFreq>>1)|((newFreq+0x800)&0xf800);
-          }
-        }
-        if ((newFreq&0x7ff)<boundaryBottom && (newFreq&0xf800)>0) {
-          if (parent->song.fbPortaPause) {
-            opChan[ch].portaPauseFreq=newFreq=(boundaryTop-1)|((newFreq-0x800)&0xf800);
-            opChan[ch].portaPause=true;
-            break;
-          } else {
-            newFreq=(newFreq<<1)|((newFreq-0x800)&0xf800);
-          }
-        }
-      }
-      opChan[ch].portaPause=false;
-      opChan[ch].freqChanged=true;
-      opChan[ch].baseFreq=newFreq;
-      if (return2) return 2;
+      PLEASE_HELP_ME(opChan[ch]);
       break;
     }
     case DIV_CMD_LEGATO: {
-      opChan[ch].baseFreq=NOTE_FREQUENCY(c.value);
+      opChan[ch].baseFreq=NOTE_FNUM_BLOCK(c.value,11);
       opChan[ch].freqChanged=true;
+      break;
+    }
+    case DIV_CMD_FM_EXTCH: {
+      extMode=c.value;
+      immWrite(0x27,extMode?0x40:0);
       break;
     }
     case DIV_CMD_FM_LFO: {
       rWrite(0x22,(c.value&7)|((c.value>>4)<<3));
+      break;
+    }
+    case DIV_CMD_FM_FB: {
+      chan[2].state.fb=c.value&7;
+      rWrite(chanOffs[2]+ADDR_FB_ALG,(chan[2].state.alg&7)|(chan[2].state.fb<<3));
       break;
     }
     case DIV_CMD_FM_MULT: { // TODO
@@ -456,7 +425,7 @@ void DivPlatformYM2203Ext::muteChannel(int ch, bool mute) {
   if (isOpMuted[ch-2]) {
     rWrite(baseAddr+0x40,127);
   } else if (isOutput[ins->fm.alg][ordch]) {
-    rWrite(baseAddr+0x40,127-(((127-op.tl)*(opChan[ch-2].vol&0x7f))/127));
+    rWrite(baseAddr+0x40,127-VOL_SCALE_LOG(127-op.tl,opChan[ch-2].vol&0x7f,127));
   } else {
     rWrite(baseAddr+0x40,op.tl);
   }
@@ -471,7 +440,7 @@ void DivPlatformYM2203Ext::forceIns() {
         rWrite(baseAddr+ADDR_TL,127);
       } else {
         if (isOutput[chan[i].state.alg][j]) {
-          rWrite(baseAddr+ADDR_TL,127-(((127-op.tl)*(chan[i].outVol&0x7f))/127));
+          rWrite(baseAddr+ADDR_TL,127-VOL_SCALE_LOG(127-op.tl,chan[i].outVol&0x7f,127));
         } else {
           rWrite(baseAddr+ADDR_TL,op.tl);
         }
@@ -488,9 +457,6 @@ void DivPlatformYM2203Ext::forceIns() {
       chan[i].keyOn=true;
       chan[i].freqChanged=true;
     }
-  }
-  for (int i=3; i<6; i++) {
-    chan[i].insChanged=true;
   }
 
   ay->forceIns();
@@ -512,6 +478,12 @@ void* DivPlatformYM2203Ext::getChanState(int ch) {
   if (ch>=6) return &chan[ch-3];
   if (ch>=2) return &opChan[ch-2];
   return &chan[ch];
+}
+
+DivMacroInt* DivPlatformYM2203Ext::getChanMacroInt(int ch) {
+  if (ch>=6) return ay->getChanMacroInt(ch-6);
+  if (ch>=2) return NULL; // currently not implemented
+  return &chan[ch].std;
 }
 
 DivDispatchOscBuffer* DivPlatformYM2203Ext::getOscBuffer(int ch) {
@@ -551,9 +523,10 @@ int DivPlatformYM2203Ext::init(DivEngine* parent, int channels, int sugRate, uns
   for (int i=0; i<4; i++) {
     isOpMuted[i]=false;
   }
+  extSys=true;
 
   reset();
-  return 19;
+  return 9;
 }
 
 void DivPlatformYM2203Ext::quit() {

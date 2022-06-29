@@ -45,8 +45,8 @@
 #define BUSY_BEGIN_SOFT softLocked=true; isBusy.lock();
 #define BUSY_END isBusy.unlock(); softLocked=false;
 
-#define DIV_VERSION "dev95"
-#define DIV_ENGINE_VERSION 95
+#define DIV_VERSION "0.6pre1"
+#define DIV_ENGINE_VERSION 100
 
 // for imports
 #define DIV_VERSION_MOD 0xff01
@@ -60,8 +60,9 @@ enum DivStatusView {
 enum DivAudioEngines {
   DIV_AUDIO_JACK=0,
   DIV_AUDIO_SDL=1,
-  DIV_AUDIO_NULL=2,
-  DIV_AUDIO_DUMMY=3
+  
+  DIV_AUDIO_NULL=126,
+  DIV_AUDIO_DUMMY=127
 };
 
 enum DivAudioExportModes {
@@ -83,11 +84,11 @@ struct DivChannelState {
   int note, oldNote, lastIns, pitch, portaSpeed, portaNote;
   int volume, volSpeed, cut, rowDelay, volMax;
   int delayOrder, delayRow, retrigSpeed, retrigTick;
-  int vibratoDepth, vibratoRate, vibratoPos, vibratoDir, vibratoFine;
+  int vibratoDepth, vibratoRate, vibratoPos, vibratoPosGiant, vibratoDir, vibratoFine;
   int tremoloDepth, tremoloRate, tremoloPos;
   unsigned char arp, arpStage, arpTicks, panL, panR;
   bool doNote, legato, portaStop, keyOn, keyOff, nowYouCanStop, stopOnOff;
-  bool arpYield, delayLocked, inPorta, scheduledSlideReset, shorthandPorta, noteOnInhibit, resetArp;
+  bool arpYield, delayLocked, inPorta, scheduledSlideReset, shorthandPorta, wasShorthandPorta, noteOnInhibit, resetArp;
 
   int midiNote, curMidiNote, midiPitch;
   size_t midiAge;
@@ -112,6 +113,7 @@ struct DivChannelState {
     vibratoDepth(0),
     vibratoRate(0),
     vibratoPos(0),
+    vibratoPosGiant(0),
     vibratoDir(0),
     vibratoFine(15),
     tremoloDepth(0),
@@ -134,6 +136,7 @@ struct DivChannelState {
     inPorta(false),
     scheduledSlideReset(false),
     shorthandPorta(false),
+    wasShorthandPorta(false),
     noteOnInhibit(false),
     resetArp(false),
     midiNote(-1),
@@ -303,7 +306,7 @@ class DivEngine {
   bool systemsRegistered;
   bool hasLoadedSomething;
   int softLockCount;
-  int subticks, ticks, curRow, curOrder, remainingLoops, nextSpeed;
+  int subticks, ticks, curRow, curOrder, prevRow, prevOrder, remainingLoops, totalLoops, lastLoopPos, exportLoopCount, nextSpeed;
   size_t curSubSongIndex;
   double divider;
   int cycles;
@@ -312,11 +315,13 @@ class DivEngine {
   int changeOrd, changePos, totalSeconds, totalTicks, totalTicksR, totalCmds, lastCmds, cmdsPerSecond, globalPitch;
   unsigned char extValue;
   unsigned char speed1, speed2;
+  short tempoAccum;
   DivStatusView view;
   DivHaltPositions haltOn;
   DivChannelState chan[DIV_MAX_CHANS];
   DivAudioEngines audioEngine;
   DivAudioExportModes exportMode;
+  double exportFadeOut;
   std::map<String,String> conf;
   std::queue<DivNoteEvent> pendingNotes;
   bool isMuted[DIV_MAX_CHANS];
@@ -338,16 +343,20 @@ class DivEngine {
     int sample;
     int wave;
     unsigned int pos;
+    int pBegin, pEnd;
     SamplePreview():
       sample(-1),
       wave(-1),
-      pos(0) {}
+      pos(0),
+      pBegin(-1),
+      pEnd(-1) {}
   } sPreview;
 
   short vibTable[64];
   int reversePitchTable[4096];
   int pitchTable[4096];
   int midiBaseChan;
+  bool midiPoly;
   size_t midiAgeCounter;
 
   blip_buffer_t* samp_bb;
@@ -374,7 +383,7 @@ class DivEngine {
   void processRow(int i, bool afterDelay);
   void nextOrder();
   void nextRow();
-  void performVGMWrite(SafeWriter* w, DivSystem sys, DivRegWrite& write, int streamOff, double* loopTimer, double* loopFreq, int* loopSample, bool isSecond);
+  void performVGMWrite(SafeWriter* w, DivSystem sys, DivRegWrite& write, int streamOff, double* loopTimer, double* loopFreq, int* loopSample, bool* sampleDir, bool isSecond);
   // returns true if end of song.
   bool nextTick(bool noAccum=false, bool inhibitLowLat=false);
   bool perSystemEffect(int ch, unsigned char effect, unsigned char effectVal);
@@ -397,8 +406,11 @@ class DivEngine {
   void loadOPNI(SafeReader& reader, std::vector<DivInstrument*>& ret, String& stripPath);
   void loadY12(SafeReader& reader, std::vector<DivInstrument*>& ret, String& stripPath);
   void loadBNK(SafeReader& reader, std::vector<DivInstrument*>& ret, String& stripPath);
+  void loadGYB(SafeReader& reader, std::vector<DivInstrument*>& ret, String& stripPath);
   void loadOPM(SafeReader& reader, std::vector<DivInstrument*>& ret, String& stripPath);
   void loadFF(SafeReader& reader, std::vector<DivInstrument*>& ret, String& stripPath);
+  void loadWOPL(SafeReader& reader, std::vector<DivInstrument*>& ret, String& stripPath);
+  void loadWOPN(SafeReader& reader, std::vector<DivInstrument*>& ret, String& stripPath);
 
   int loadSampleROM(String path, ssize_t expectedSize, unsigned char*& ret);
 
@@ -455,7 +467,7 @@ class DivEngine {
     // dump to VGM.
     SafeWriter* saveVGM(bool* sysToExport=NULL, bool loop=true, int version=0x171);
     // export to an audio file
-    bool saveAudio(const char* path, int loops, DivAudioExportModes mode);
+    bool saveAudio(const char* path, int loops, DivAudioExportModes mode, double fadeOutTime=0.0);
     // wait for audio export to finish
     void waitAudioFile();
     // stop audio file export
@@ -521,7 +533,7 @@ class DivEngine {
     void syncReset();
 
     // trigger sample preview
-    void previewSample(int sample, int note=-1);
+    void previewSample(int sample, int note=-1, int pStart=-1, int pEnd=-1);
     void stopSamplePreview();
 
     // trigger wave preview
@@ -643,6 +655,9 @@ class DivEngine {
 
     // is playing
     bool isPlaying();
+    
+    // is running
+    bool isRunning();
 
     // is stepping
     bool isStepping();
@@ -670,7 +685,7 @@ class DivEngine {
     int addWave();
 
     // add wavetable from file
-    bool addWaveFromFile(const char* path);
+    bool addWaveFromFile(const char* path, bool loadRaw=true);
 
     // delete wavetable
     void delWave(int index);
@@ -718,6 +733,9 @@ class DivEngine {
     void autoNoteOn(int chan, int ins, int note, int vol=-1);
     void autoNoteOff(int chan, int note, int vol=-1);
     void autoNoteOffAll();
+    
+    // set whether autoNoteIn is mono or poly
+    void setAutoNotePoly(bool poly);
 
     // go to order
     void setOrder(unsigned char order);
@@ -818,6 +836,13 @@ class DivEngine {
     // remove subsong
     bool removeSubSong(int index);
 
+    // move subsong
+    void moveSubSongUp(size_t index);
+    void moveSubSongDown(size_t index);
+
+    // clear all subsong data
+    void clearSubSongs();
+
     // change system
     void changeSystem(int index, DivSystem which, bool preserveOrder=true);
 
@@ -917,7 +942,12 @@ class DivEngine {
       ticks(0),
       curRow(0),
       curOrder(0),
+      prevRow(0),
+      prevOrder(0),
       remainingLoops(-1),
+      totalLoops(0),
+      lastLoopPos(0),
+      exportLoopCount(0),
       nextSpeed(3),
       curSubSongIndex(0),
       divider(60),
@@ -936,11 +966,14 @@ class DivEngine {
       extValue(0),
       speed1(3),
       speed2(3),
+      tempoAccum(0),
       view(DIV_STATUS_NOTHING),
       haltOn(DIV_HALT_NONE),
       audioEngine(DIV_AUDIO_NULL),
       exportMode(DIV_EXPORT_MODE_ONE),
+      exportFadeOut(0.0),
       midiBaseChan(0),
+      midiPoly(true),
       midiAgeCounter(0),
       samp_bb(NULL),
       samp_bbInLen(0),

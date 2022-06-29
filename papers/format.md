@@ -25,10 +25,18 @@ the format has changed several times across versions. a `(>=VER)` indicates this
 
 furthermore, an `or reserved` indicates this field is always present, but is reserved when the version condition is not met.
 
+the `size of this block` fields represent the size of a block excluding the ID and the aforementioned field.
+these fields are 0 in format versions prior to 100 (0.6pre1).
+
 # format versions
 
 the format versions are:
 
+- 100: Furnace 0.6pre1
+- 99: Furnace dev99
+- 98: Furnace dev98
+- 97: Furnace dev97
+- 96: Furnace dev96
 - 95: Furnace dev95
 - 94: Furnace dev94
 - 93: Furnace dev93
@@ -126,7 +134,7 @@ size | description
 size | description
 -----|------------------------------------
   4  | "INFO" block ID
-  4  | reserved
+  4  | size of this block
   1  | time base (of first song)
   1  | speed 1 (of first song)
   1  | speed 2 (of first song)
@@ -221,6 +229,12 @@ size | description
      |   - 0xb6: OPN extended - 9 channels
      |   - 0xb7: PC-98 extended - 19 channels
      |   - 0xb8: YMZ280B - 8 channels
+     |   - 0xb9: Namco WSG - 3 channels
+     |   - 0xba: Namco 15xx - 8 channels
+     |   - 0xbb: Namco CUS30 - 8 channels
+     |   - 0xbc: reserved - 8 channels
+     |   - 0xbd: YM2612 extra features extended - 11 channels
+     |   - 0xbe: YM2612 extra features - 7 channels
      |   - 0xde: YM2610B extended - 19 channels
      |   - 0xe0: QSound - 19 channels
      |   - 0xfd: Dummy System - 8 channels
@@ -238,7 +252,7 @@ size | description
   4f | A-4 tuning
   1  | limit slides (>=36) or reserved
   1  | linear pitch (>=36) or reserved
-     | - 0: non-linaer
+     | - 0: non-linear
      | - 1: only pitch change (04xy/E5xx) linear
      | - 2: full linear (>=94)
   1  | loop modality (>=36) or reserved
@@ -290,13 +304,22 @@ size | description
   1  | new ins affects envelope (Game Boy) (>=72) or reserved
   1  | ExtCh channel state is shared (>=78) or reserved
   1  | ignore DAC mode change outside of intended channel (>=83) or reserved
-  1  | E1xx and E2xx also take priority over Slide00 (>=83) or reserved
+  1  | E1xy and E2xy also take priority over Slide00 (>=83) or reserved
   1  | new Sega PCM (with macros and proper vol/pan) (>=84) or reserved
   1  | weird f-num/block-based chip pitch slides (>=85) or reserved
   1  | SN duty macro always resets phase (>=86) or reserved
   1  | pitch macro is linear (>=90) or reserved
   1  | pitch slide speed in full linear pitch mode (>=94) or reserved
- 18  | reserved
+  1  | old octave boundary behavior (>=97) or reserved
+  1  | disable OPN2 DAC volume control (>=98) or reserved
+  1  | new volume scaling strategy (>=99) or reserved
+  1  | volume macro still applies after end (>=99) or reserved
+  1  | broken outVol (>=99) or reserved
+  1  | E1xy and E2xy stop on same note (>=100) or reserved
+  8  | reserved
+ --- | **virtual tempo data**
+  2  | virtual tempo numerator of first song (>=96) or reserved
+  2  | virtual tempo denominator of first song (>=96) or reserved
  --- | **additional subsongs** (>=95)
  STR | first subsong name
  STR | first subsong comment
@@ -314,7 +337,7 @@ the way it's currently done is really weird, but it provides for some backwards 
 size | description
 -----|------------------------------------
   4  | "SONG" block ID
-  4  | reserved
+  4  | size of this block
   1  | time base
   1  | speed 1
   1  | speed 2
@@ -328,7 +351,8 @@ size | description
      | - the limit is 256.
   1  | highlight A
   1  | highlight B
-  4  | reserved
+  2  | virtual tempo numerator
+  2  | virtual tempo denominator
  STR | subsong name
  STR | subsong comment
  ??? | orders
@@ -367,7 +391,7 @@ notes:
 size | description
 -----|------------------------------------
   4  | "INST" block ID
-  4  | reserved
+  4  | size of this block
   2  | format version (see header)
   1  | instrument type
      | - 0: standard
@@ -401,6 +425,7 @@ size | description
      | - 28: MultiPCM
      | - 29: SNES
      | - 30: Sound Unit
+     | - 31: Namco WSG
   1  | reserved
  STR | instrument name
  --- | **FM instrument data**
@@ -775,7 +800,7 @@ size | description
 size | description
 -----|------------------------------------
   4  | "WAVE" block ID
-  4  | reserved
+  4  | size of this block
  STR | wavetable name
   4  | wavetable size
   4  | wavetable min
@@ -789,7 +814,7 @@ size | description
 size | description
 -----|------------------------------------
   4  | "SMPL" block ID
-  4  | reserved
+  4  | size of this block
  STR | sample name
   4  | length
   4  | rate
@@ -798,12 +823,10 @@ size | description
   1  | depth
      | - 0: ZX Spectrum overlay drum (1-bit)
      | - 1: 1-bit NES DPCM (1-bit)
-     | - 2: AICA ADPCM
      | - 3: YMZ ADPCM
      | - 4: QSound ADPCM
      | - 5: ADPCM-A
      | - 6: ADPCM-B
-     | - 7: X68000 ADPCM
      | - 8: 8-bit PCM
      | - 9: BRR (SNES)
      | - 10: VOX
@@ -823,7 +846,7 @@ size | description
 size | description
 -----|------------------------------------
   4  | "PATR" block ID
-  4  | reserved
+  4  | size of this block
   2  | channel
   2  | pattern index
   2  | subsong (>=95) or reserved

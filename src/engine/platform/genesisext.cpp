@@ -21,9 +21,8 @@
 #include "../engine.h"
 #include <math.h>
 
-#include "genesisshared.h"
-
-#define CHIP_FREQBASE 9440540
+#define CHIP_FREQBASE fmFreqBase
+#define CHIP_DIVIDER fmDivBase
 
 int DivPlatformGenesisExt::dispatch(DivCommand c) {
   if (c.chan<2) {
@@ -35,6 +34,10 @@ int DivPlatformGenesisExt::dispatch(DivCommand c) {
   }
   int ch=c.chan-2;
   int ordch=orderedOps[ch];
+  if (!extMode) {
+    c.chan=2;
+    return DivPlatformGenesis::dispatch(c);
+  }
   switch (c.cmd) {
     case DIV_CMD_NOTE_ON: {
       DivInstrument* ins=parent->getIns(opChan[ch].ins,DIV_INS_FM);
@@ -54,7 +57,7 @@ int DivPlatformGenesisExt::dispatch(DivCommand c) {
         rWrite(baseAddr+0x40,127);
       } else {
         if (opChan[ch].insChanged) {
-          rWrite(baseAddr+0x40,127-(((127-op.tl)*(opChan[ch].vol&0x7f))/127));
+          rWrite(baseAddr+0x40,127-VOL_SCALE_LOG(127-op.tl,opChan[ch].vol&0x7f,127));
         }
       }
       if (opChan[ch].insChanged) {
@@ -92,7 +95,7 @@ int DivPlatformGenesisExt::dispatch(DivCommand c) {
       if (isOpMuted[ch]) {
         rWrite(baseAddr+0x40,127);
       } else {
-        rWrite(baseAddr+0x40,127-(((127-op.tl)*(opChan[ch].vol&0x7f))/127));
+        rWrite(baseAddr+0x40,127-VOL_SCALE_LOG(127-op.tl,opChan[ch].vol&0x7f,127));
       }
       break;
     }
@@ -150,67 +153,22 @@ int DivPlatformGenesisExt::dispatch(DivCommand c) {
         }
         break;
       }
-      int boundaryBottom=parent->calcBaseFreq(chipClock,CHIP_FREQBASE,0,false);
-      int boundaryTop=parent->calcBaseFreq(chipClock,CHIP_FREQBASE,12,false);
-      int destFreq=NOTE_FNUM_BLOCK(c.value2,11);
-      int newFreq;
-      bool return2=false;
-      if (opChan[ch].portaPause) {
-        opChan[ch].baseFreq=opChan[ch].portaPauseFreq;
-      }
-      if (destFreq>opChan[ch].baseFreq) {
-        newFreq=opChan[ch].baseFreq+c.value;
-        if (newFreq>=destFreq) {
-          newFreq=destFreq;
-          return2=true;
-        }
-      } else {
-        newFreq=opChan[ch].baseFreq-c.value;
-        if (newFreq<=destFreq) {
-          newFreq=destFreq;
-          return2=true;
-        }
-      }
-      // what the heck!
-      if (!opChan[ch].portaPause) {
-        if ((newFreq&0x7ff)>boundaryTop && (newFreq&0xf800)<0x3800) {
-          if (parent->song.fbPortaPause) {
-            opChan[ch].portaPauseFreq=(boundaryBottom)|((newFreq+0x800)&0xf800);
-            opChan[ch].portaPause=true;
-            break;
-          } else {
-            newFreq=(newFreq>>1)|((newFreq+0x800)&0xf800);
-          }
-        }
-        if ((newFreq&0x7ff)<boundaryBottom && (newFreq&0xf800)>0) {
-          if (parent->song.fbPortaPause) {
-            opChan[ch].portaPauseFreq=newFreq=(boundaryTop-1)|((newFreq-0x800)&0xf800);
-            opChan[ch].portaPause=true;
-            break;
-          } else {
-            newFreq=(newFreq<<1)|((newFreq-0x800)&0xf800);
-          }
-        }
-      }
-      opChan[ch].portaPause=false;
-      opChan[ch].freqChanged=true;
-      opChan[ch].baseFreq=newFreq;
-      if (return2) return 2;
+      PLEASE_HELP_ME(opChan[ch]);
       break;
     }
     case DIV_CMD_SAMPLE_MODE: {
       // not ignored actually!
       if (!parent->song.ignoreDACModeOutsideIntendedChannel) {
-        dacMode=c.value;
+        chan[5].dacMode=c.value;
         rWrite(0x2b,c.value<<7);
       }
       break;
     }
     case DIV_CMD_SAMPLE_BANK:
       if (!parent->song.ignoreDACModeOutsideIntendedChannel) {
-        sampleBank=c.value;
-        if (sampleBank>(parent->song.sample.size()/12)) {
-          sampleBank=parent->song.sample.size()/12;
+        chan[5].sampleBank=c.value;
+        if (chan[5].sampleBank>(parent->song.sample.size()/12)) {
+          chan[5].sampleBank=parent->song.sample.size()/12;
         }
       }
       break;
@@ -219,9 +177,19 @@ int DivPlatformGenesisExt::dispatch(DivCommand c) {
       opChan[ch].freqChanged=true;
       break;
     }
+    case DIV_CMD_FM_EXTCH: {
+      extMode=c.value;
+      immWrite(0x27,extMode?0x40:0);
+      break;
+    }
     case DIV_CMD_FM_LFO: {
       lfoValue=(c.value&7)|((c.value>>4)<<3);
       rWrite(0x22,lfoValue);
+      break;
+    }
+    case DIV_CMD_FM_FB: {
+      chan[2].state.fb=c.value&7;
+      rWrite(chanOffs[2]+ADDR_FB_ALG,(chan[2].state.alg&7)|(chan[2].state.fb<<3));
       break;
     }
     case DIV_CMD_FM_MULT: { // TODO
@@ -238,7 +206,7 @@ int DivPlatformGenesisExt::dispatch(DivCommand c) {
       if (isOpMuted[ch]) {
         rWrite(baseAddr+0x40,127);
       } else if (isOutput[chan[2].state.alg][c.value]) {
-        rWrite(baseAddr+0x40,127-(((127-op.tl)*(opChan[ch].vol&0x7f))/127));
+        rWrite(baseAddr+0x40,127-VOL_SCALE_LOG(127-op.tl,opChan[ch].vol&0x7f,127));
       } else {
         rWrite(baseAddr+0x40,op.tl);
       }
@@ -421,8 +389,8 @@ void DivPlatformGenesisExt::muteChannel(int ch, bool mute) {
     rWrite(baseAddr+0x40,127);
     immWrite(baseAddr+0x40,127);
   } else if (isOutput[chan[2].state.alg][ordch]) {
-    rWrite(baseAddr+0x40,127-(((127-op.tl)*(opChan[ch-2].vol&0x7f))/127));
-    immWrite(baseAddr+0x40,127-(((127-op.tl)*(opChan[ch-2].vol&0x7f))/127));
+    rWrite(baseAddr+0x40,127-VOL_SCALE_LOG(127-op.tl,opChan[ch-2].vol&0x7f,127));
+    immWrite(baseAddr+0x40,127-VOL_SCALE_LOG(127-op.tl,opChan[ch-2].vol&0x7f,127));
   } else {
     rWrite(baseAddr+0x40,op.tl);
     immWrite(baseAddr+0x40,op.tl);
@@ -461,9 +429,9 @@ void DivPlatformGenesisExt::tick(bool sysTick) {
   if (extMode) for (int i=0; i<4; i++) {
     if (opChan[i].freqChanged) {
       if (parent->song.linearPitch==2) {
-        opChan[i].freq=parent->calcFreq(opChan[i].baseFreq,opChan[i].pitch,false,4,opChan[i].pitch2,chipClock,CHIP_FREQBASE,11);
+        opChan[i].freq=parent->calcFreq(opChan[i].baseFreq,opChan[i].pitch,false,2,opChan[i].pitch2,chipClock,CHIP_FREQBASE,11);
       } else {
-        int fNum=parent->calcFreq(opChan[i].baseFreq&0x7ff,opChan[i].pitch,false,4,opChan[i].pitch2);
+        int fNum=parent->calcFreq(opChan[i].baseFreq&0x7ff,opChan[i].pitch,false,2,opChan[i].pitch2);
         int block=(opChan[i].baseFreq&0xf800)>>11;
         if (fNum<0) fNum=0;
         if (fNum>2047) {
@@ -486,8 +454,42 @@ void DivPlatformGenesisExt::tick(bool sysTick) {
       opChan[i].keyOn=false;
     }
   }
+
+  if (extMode && softPCM) {
+    if (chan[7].freqChanged) {
+      chan[7].freq=parent->calcFreq(chan[7].baseFreq,chan[7].pitch,true,0,chan[7].pitch2,chipClock,CHIP_DIVIDER);
+      if (chan[7].freq<1) chan[7].freq=1;
+      if (chan[7].freq>1024) chan[7].freq=1024;
+      int wf=0x400-chan[7].freq;
+      immWrite(0x24,wf>>2);
+      immWrite(0x25,wf&3);
+      chan[7].freqChanged=false;
+    }
+
+    if (chan[7].keyOff || chan[7].keyOn) {
+      writeNoteOn=true;
+      for (int i=0; i<4; i++) {
+        writeMask|=opChan[i].active<<(4+i);
+      }
+    }
+  }
+
   if (writeNoteOn) {
+    if (chan[7].active) { // CSM
+      writeMask^=0xf0;
+    }
     immWrite(0x28,writeMask);
+  }
+
+  if (extMode && softPCM) {
+    if (chan[7].keyOn) {
+      immWrite(0x27,0x81);
+      chan[7].keyOn=false;
+    }
+    if (chan[7].keyOff) {
+      immWrite(0x27,0x40);
+      chan[7].keyOff=false;
+    }
   }
 }
 
@@ -496,11 +498,11 @@ void DivPlatformGenesisExt::forceIns() {
     for (int j=0; j<4; j++) {
       unsigned short baseAddr=chanOffs[i]|opOffs[j];
       DivInstrumentFM::Operator& op=chan[i].state.op[j];
-      if (i==2) { // extended channel
+      if (i==2 && extMode) { // extended channel
         if (isOpMuted[j]) {
           rWrite(baseAddr+0x40,127);
         } else if (isOutput[chan[i].state.alg][j]) {
-          rWrite(baseAddr+0x40,127-(((127-op.tl)*(opChan[j].vol&0x7f))/127));
+          rWrite(baseAddr+0x40,127-VOL_SCALE_LOG(127-op.tl,opChan[j].vol&0x7f,127));
         } else {
           rWrite(baseAddr+0x40,op.tl);
         }
@@ -509,7 +511,7 @@ void DivPlatformGenesisExt::forceIns() {
           rWrite(baseAddr+ADDR_TL,127);
         } else {
           if (isOutput[chan[i].state.alg][j]) {
-            rWrite(baseAddr+ADDR_TL,127-(((127-op.tl)*(chan[i].outVol&0x7f))/127));
+            rWrite(baseAddr+ADDR_TL,127-VOL_SCALE_LOG(127-op.tl,chan[i].outVol&0x7f,127));
           } else {
             rWrite(baseAddr+ADDR_TL,op.tl);
           }
@@ -529,7 +531,7 @@ void DivPlatformGenesisExt::forceIns() {
       chan[i].freqChanged=true;
     }
   }
-  if (dacMode) {
+  if (chan[5].dacMode) {
     rWrite(0x2b,0x80);
   }
   immWrite(0x22,lfoValue);
@@ -546,6 +548,12 @@ void* DivPlatformGenesisExt::getChanState(int ch) {
   if (ch>=6) return &chan[ch-3];
   if (ch>=2) return &opChan[ch-2];
   return &chan[ch];
+}
+
+DivMacroInt* DivPlatformGenesisExt::getChanMacroInt(int ch) {
+  if (ch>=6) return &chan[ch-3].std;
+  if (ch>=2) return NULL; // currently not implemented
+  return &chan[ch].std;
 }
 
 DivDispatchOscBuffer* DivPlatformGenesisExt::getOscBuffer(int ch) {
@@ -593,6 +601,7 @@ int DivPlatformGenesisExt::init(DivEngine* parent, int channels, int sugRate, un
   for (int i=0; i<4; i++) {
     isOpMuted[i]=false;
   }
+  extSys=true;
 
   reset();
   return 13;

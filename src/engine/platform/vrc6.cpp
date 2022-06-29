@@ -189,7 +189,7 @@ void DivPlatformVRC6::tick(bool sysTick) {
     if (chan[i].std.pitch.had) {
       if (chan[i].std.pitch.mode) {
         chan[i].pitch2+=chan[i].std.pitch.val;
-        CLAMP_VAR(chan[i].pitch2,-2048,2048);
+        CLAMP_VAR(chan[i].pitch2,-32768,32767);
       } else {
         chan[i].pitch2=chan[i].std.pitch.val;
       }
@@ -264,6 +264,9 @@ int DivPlatformVRC6::dispatch(DivCommand c) {
             }
             chan[c.chan].active=true;
             chan[c.chan].macroInit(ins);
+            if (!parent->song.brokenOutVol && !chan[c.chan].std.vol.will) {
+              chan[c.chan].outVol=chan[c.chan].vol;
+            }
             //chan[c.chan].keyOn=true;
             chan[c.chan].furnaceDac=true;
           } else {
@@ -433,6 +436,10 @@ void DivPlatformVRC6::forceIns() {
 
 void* DivPlatformVRC6::getChanState(int ch) {
   return &chan[ch];
+}
+
+DivMacroInt* DivPlatformVRC6::getChanMacroInt(int ch) {
+  return &chan[ch].std;
 }
 
 DivDispatchOscBuffer* DivPlatformVRC6::getOscBuffer(int ch) {

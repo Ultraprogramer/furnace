@@ -1,8 +1,9 @@
 /*
 	License: BSD-3-Clause
-	see https://github.com/cam900/vgsound_emu/LICENSE for more details
+	see https://github.com/cam900/vgsound_emu/blob/vgsound_emu_v1/LICENSE for more details
 
 	Copyright holder(s): cam900
+	Modifiers and Contributors for Furnace: cam900, tildearrow
 	Konami VRC VI sound emulation core
 
 	It's one of NES mapper with built-in sound chip, and also one of 2 Konami VRCs with this feature. (rest one has OPLL derivatives.)
@@ -81,6 +82,7 @@
 */
 
 #include "vrcvi.hpp"
+#include <string.h>
 
 void vrcvi_core::tick()
 {
@@ -119,7 +121,7 @@ void vrcvi_core::reset()
 	m_timer.reset();
 	m_control.reset();
 	m_out = 0;
-  std::fill(std::begin(m_ch_out),std::end(m_ch_out),0);
+        memset(m_ch_out,0,sizeof(m_ch_out));
 }
 
 bool vrcvi_core::alu_t::tick()

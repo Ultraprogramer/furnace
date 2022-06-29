@@ -581,7 +581,7 @@ YM2203 English datasheet: http://www.appleii-box.de/APPLE2/JonasCard/YM2203%20da
 YM2203 Japanese datasheet contents, translated: http://www.larwe.com/technical/chip_ym2203.html
 */
 
-// additional modifications by tildearrow and Eulous for furnace (particularly AY8930 emulation)
+// additional modifications by tildearrow, Eulous, cam900 and Grauw for furnace (particularly AY8930 emulation)
 
 #include "ay8910.h"
 #include <stdio.h>
@@ -1061,7 +1061,7 @@ void ay8910_device::sound_stream_update(short** outputs, int outLen)
 		for (int chan = 0; chan < NUM_CHANNELS; chan++)
 		{
 			tone = &m_tone[chan];
-			const int period = tone->period * (m_step_mul << 1);
+			const int period = std::max<int>(1, tone->period) * (m_step_mul << 1);
 			tone->count += is_expanded_mode() ? 32 : ((m_feature & PSG_HAS_EXPANDED_MODE) ? 1 : 2);
 			while (tone->count >= period)
 			{
@@ -1115,7 +1115,7 @@ void ay8910_device::sound_stream_update(short** outputs, int outLen)
 			envelope = &m_envelope[chan];
 			if (envelope->holding == 0)
 			{
-				const int period = envelope->period * m_env_step_mul;
+				const int period = std::max<int>(1, envelope->period) * m_env_step_mul;
 				if ((++envelope->count) >= period)
 				{
 					envelope->count = 0;

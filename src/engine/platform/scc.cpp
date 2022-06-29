@@ -146,7 +146,7 @@ void DivPlatformSCC::tick(bool sysTick) {
     if (chan[i].std.pitch.had) {
       if (chan[i].std.pitch.mode) {
         chan[i].pitch2+=chan[i].std.pitch.val;
-        CLAMP_VAR(chan[i].pitch2,-2048,2048);
+        CLAMP_VAR(chan[i].pitch2,-32768,32767);
       } else {
         chan[i].pitch2=chan[i].std.pitch.val;
       }
@@ -161,9 +161,14 @@ void DivPlatformSCC::tick(bool sysTick) {
       chan[i].freq=parent->calcFreq(chan[i].baseFreq,chan[i].pitch,true,0,chan[i].pitch2,chipClock,CHIP_DIVIDER)-1;
       if (chan[i].freq<0) chan[i].freq=0;
       if (chan[i].freq>4095) chan[i].freq=4095;
-      rWrite(regBase+0+i*2,chan[i].freq&0xff);
-      rWrite(regBase+1+i*2,chan[i].freq>>8);
+      if (!chan[i].freqInit || regPool[regBase+0+i*2]!=(chan[i].freq&0xff)) {
+        rWrite(regBase+0+i*2,chan[i].freq&0xff);
+      }
+      if (!chan[i].freqInit || regPool[regBase+1+i*2]!=(chan[i].freq>>8)) {
+        rWrite(regBase+1+i*2,chan[i].freq>>8);
+      }
       chan[i].freqChanged=false;
+      chan[i].freqInit=!skipRegisterWrites;
     }
   }
 }
@@ -179,6 +184,9 @@ int DivPlatformSCC::dispatch(DivCommand c) {
       }
       chan[c.chan].active=true;
       chan[c.chan].macroInit(ins);
+      if (!parent->song.brokenOutVol && !chan[c.chan].std.vol.will) {
+        chan[c.chan].outVol=chan[c.chan].vol;
+      }
       if (!isMuted[c.chan]) {
         rWrite(regBase+15,regPool[regBase+15]|(1<<c.chan));
       }
@@ -286,6 +294,7 @@ void DivPlatformSCC::forceIns() {
   for (int i=0; i<5; i++) {
     chan[i].insChanged=true;
     chan[i].freqChanged=true;
+    chan[i].freqInit=false;
     if (isPlus || i<3) {
       updateWave(i);
     }
@@ -299,6 +308,10 @@ void DivPlatformSCC::forceIns() {
 
 void* DivPlatformSCC::getChanState(int ch) {
   return &chan[ch];
+}
+
+DivMacroInt* DivPlatformSCC::getChanMacroInt(int ch) {
+  return &chan[ch].std;
 }
 
 DivDispatchOscBuffer* DivPlatformSCC::getOscBuffer(int ch) {
@@ -319,7 +332,7 @@ void DivPlatformSCC::reset() {
   for (int i=0; i<5; i++) {
     chan[i]=DivPlatformSCC::Channel();
     chan[i].std.setEngine(parent);
-    chan[i].ws.setEngine(parent);
+    chan[i].ws.setEngine(parent,128);
     chan[i].ws.init(NULL,32,255,false);
     chan[i].vol=15;
     chan[i].outVol=15;
@@ -364,6 +377,27 @@ void DivPlatformSCC::setChipModel(bool isplus) {
   isPlus=isplus;
 }
 
+void DivPlatformSCC::setFlags(unsigned int flags) {
+  switch (flags&0x7f) {
+    case 0x00:
+      chipClock=COLOR_NTSC/2.0;
+      break;
+    case 0x01:
+      chipClock=COLOR_PAL*2.0/5.0;
+      break;
+    case 0x02:
+      chipClock=3000000.0/2.0;
+      break;
+    case 0x03:
+      chipClock=4000000.0/2.0;
+      break;
+  }
+  rate=chipClock/8;
+  for (int i=0; i<5; i++) {
+    oscBuf[i]->rate=rate;
+  }
+}
+
 int DivPlatformSCC::init(DivEngine* p, int channels, int sugRate, unsigned int flags) {
   parent=p;
   dumpWrites=false;
@@ -373,11 +407,7 @@ int DivPlatformSCC::init(DivEngine* p, int channels, int sugRate, unsigned int f
     isMuted[i]=false;
     oscBuf[i]=new DivDispatchOscBuffer;
   }
-  chipClock=COLOR_NTSC/2.0;
-  rate=chipClock/8;
-  for (int i=0; i<5; i++) {
-    oscBuf[i]->rate=rate;
-  }
+  setFlags(flags);
   if (isPlus) {
     scc=new k052539_scc_core;
     regBase=0xa0;

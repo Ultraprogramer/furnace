@@ -33,7 +33,7 @@ class DivPlatformOPLL: public DivDispatch {
       DivInstrumentFM state;
       DivMacroInt std;
       unsigned char freqH, freqL;
-      int freq, baseFreq, pitch, pitch2, note, ins;
+      int freq, baseFreq, pitch, pitch2, note, ins, fixedFreq;
       bool active, insChanged, freqChanged, keyOn, keyOff, portaPause, furnaceDac, inPorta;
       int vol, outVol;
       unsigned char pan;
@@ -50,6 +50,7 @@ class DivPlatformOPLL: public DivDispatch {
         pitch2(0),
         note(0),
         ins(-1),
+        fixedFreq(0),
         active(false),
         insChanged(true),
         freqChanged(false),
@@ -101,6 +102,7 @@ class DivPlatformOPLL: public DivDispatch {
     void acquire(short* bufL, short* bufR, size_t start, size_t len);
     int dispatch(DivCommand c);
     void* getChanState(int chan);
+    DivMacroInt* getChanMacroInt(int ch);
     DivDispatchOscBuffer* getOscBuffer(int chan);
     unsigned char* getRegisterPool();
     int getRegisterPoolSize();

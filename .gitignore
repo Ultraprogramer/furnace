@@ -1,5 +1,7 @@
 .vscode/
 build/
+clangbuild/
+nosdl/
 release/
 t/
 winbuild/
@@ -18,3 +20,4 @@ android/app/.cxx/
 .vs/
 CMakeSettings.json
 CMakePresets.json
+extern/imgui_patched/examples/

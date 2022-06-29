@@ -79,7 +79,7 @@ const int vgmVersions[6]={
   0x171
 };
 
-const char* insTypes[DIV_INS_MAX]={
+const char* insTypes[DIV_INS_MAX+1]={
   "Standard (SMS/NES)",
   "FM (4-operator)",
   "Game Boy",
@@ -97,7 +97,7 @@ const char* insTypes[DIV_INS_MAX]={
   "FM (OPL)",
   "FDS",
   "Virtual Boy",
-  "Namco 163",
+  "Namco C163",
   "Konami SCC/Bubble System WSG",
   "FM (OPZ)",
   "POKEY",
@@ -111,17 +111,20 @@ const char* insTypes[DIV_INS_MAX]={
   "MultiPCM",
   "SNES",
   "Sound Unit",
+  "Namco WSG",
+  "OPL (drums)",
+  NULL
 };
 
 const char* sampleDepths[17]={
   "1-bit PCM",
   "1-bit DPCM",
-  "Yamaha AICA",
+  NULL,
   "YMZ/YMU ADPCM",
   "QSound ADPCM",
   "ADPCM-A",
   "ADPCM-B",
-  "X68000 ADPCM",
+  NULL,
   "8-bit PCM",
   NULL, // "BRR",
   "VOX",
@@ -392,7 +395,7 @@ const FurnaceGUIColors fxColors[256]={
   GUI_COLOR_PATTERN_EFFECT_INVALID,
   GUI_COLOR_PATTERN_EFFECT_INVALID,
   GUI_COLOR_PATTERN_EFFECT_INVALID,
-  GUI_COLOR_PATTERN_EFFECT_INVALID,
+  GUI_COLOR_PATTERN_EFFECT_MISC, // DF
 
   // E0-FF extended effects
   GUI_COLOR_PATTERN_EFFECT_MISC, // E0
@@ -444,6 +447,7 @@ const FurnaceGUIActionDef guiActions[GUI_ACTION_MAX]={
   D("PLAY_TOGGLE", "Play/Stop (toggle)", SDLK_RETURN),
   D("PLAY", "Play", 0),
   D("STOP", "Stop", 0),
+  D("PLAY_START", "Play (from beginning)", SDLK_F5),
   D("PLAY_REPEAT", "Play (repeat pattern)", 0),
   D("PLAY_CURSOR", "Play from cursor", FURKMOD_SHIFT|SDLK_RETURN),
   D("STEP_ONE", "Step row", FURKMOD_CMD|SDLK_RETURN),
@@ -488,6 +492,7 @@ const FurnaceGUIActionDef guiActions[GUI_ACTION_MAX]={
   D("WINDOW_SUBSONGS", "Subsongs", 0),
   D("EFFECT_LIST", "Effect List", 0),
   D("WINDOW_CHAN_OSC", "Oscilloscope (per-channel)", 0),
+  D("WINDOW_FIND", "Find/Replace", FURKMOD_CMD|SDLK_f),
 
   D("COLLAPSE_WINDOW", "Collapse/expand current window", 0),
   D("CLOSE_WINDOW", "Close current window", FURKMOD_SHIFT|SDLK_ESCAPE),
@@ -629,6 +634,7 @@ const FurnaceGUIActionDef guiActions[GUI_ACTION_MAX]={
   D("SAMPLE_ZOOM_OUT", "Zoom out", FURKMOD_CMD|SDLK_MINUS),
   D("SAMPLE_ZOOM_AUTO", "Toggle auto-zoom", FURKMOD_CMD|SDLK_0),
   D("SAMPLE_MAKE_INS", "Create instrument from sample", 0),
+  D("SAMPLE_SET_LOOP", "Set loop to selection", FURKMOD_CMD|SDLK_l),
   D("SAMPLE_MAX", "", NOT_AN_ACTION),
 
   D("ORDERS_MIN", "---Orders", NOT_AN_ACTION),
@@ -754,6 +760,8 @@ const FurnaceGUIColorDef guiColors[GUI_COLOR_MAX]={
   D(GUI_COLOR_INSTR_MULTIPCM,"",ImVec4(1.0f,0.8f,0.1f,1.0f)),
   D(GUI_COLOR_INSTR_SNES,"",ImVec4(0.8f,0.7f,1.0f,1.0f)),
   D(GUI_COLOR_INSTR_SU,"",ImVec4(0.95f,0.98f,1.0f,1.0f)),
+  D(GUI_COLOR_INSTR_NAMCO,"",ImVec4(1.0f,1.0f,0.0f,1.0f)),
+  D(GUI_COLOR_INSTR_OPL_DRUMS,"",ImVec4(0.3f,1.0f,0.9f,1.0f)),
   D(GUI_COLOR_INSTR_UNKNOWN,"",ImVec4(0.3f,0.3f,0.3f,1.0f)),
 
   D(GUI_COLOR_CHANNEL_FM,"",ImVec4(0.2f,0.8f,1.0f,1.0f)),
@@ -799,6 +807,14 @@ const FurnaceGUIColorDef guiColors[GUI_COLOR_MAX]={
   D(GUI_COLOR_PATTERN_EFFECT_SYS_SECONDARY,"",ImVec4(0.0f,1.0f,0.5f,1.0f)),
   D(GUI_COLOR_PATTERN_EFFECT_MISC,"",ImVec4(0.3f,0.3f,1.0f,1.0f)),
 
+  D(GUI_COLOR_PIANO_BACKGROUND,"",ImVec4(0.0f,0.0f,0.0f,1.0f)),
+  D(GUI_COLOR_PIANO_KEY_BOTTOM,"",ImVec4(1.0f,1.0f,1.0f,1.0f)),
+  D(GUI_COLOR_PIANO_KEY_TOP,"",ImVec4(0.0f,0.0f,0.0f,1.0f)),
+  D(GUI_COLOR_PIANO_KEY_BOTTOM_HIT,"",ImVec4(0.5f,0.7f,0.9f,1.0f)),
+  D(GUI_COLOR_PIANO_KEY_TOP_HIT,"",ImVec4(0.3f,0.5f,0.7f,1.0f)),
+  D(GUI_COLOR_PIANO_KEY_BOTTOM_ACTIVE,"",ImVec4(0.5f,0.5f,0.5f,1.0f)),
+  D(GUI_COLOR_PIANO_KEY_TOP_ACTIVE,"",ImVec4(0.4f,0.4f,0.4f,1.0f)),
+
   D(GUI_COLOR_LOGLEVEL_ERROR,"",ImVec4(1.0f,0.2f,0.2f,1.0f)),
   D(GUI_COLOR_LOGLEVEL_WARNING,"",ImVec4(1.0f,1.0f,0.2f,1.0f)),
   D(GUI_COLOR_LOGLEVEL_INFO,"",ImVec4(0.4f,1.0f,0.4f,1.0f)),
@@ -814,6 +830,8 @@ const FurnaceGUIColorDef guiColors[GUI_COLOR_MAX]={
 const int availableSystems[]={
   DIV_SYSTEM_YM2612,
   DIV_SYSTEM_YM2612_EXT,
+  DIV_SYSTEM_YM2612_FRAC,
+  DIV_SYSTEM_YM2612_FRAC_EXT,
   DIV_SYSTEM_SMS,
   DIV_SYSTEM_GB,
   DIV_SYSTEM_PCE,
@@ -869,6 +887,13 @@ const int availableSystems[]={
   DIV_SYSTEM_MMC5,
   DIV_SYSTEM_SCC,
   DIV_SYSTEM_SCC_PLUS,
+  DIV_SYSTEM_YMZ280B,
+  DIV_SYSTEM_NAMCO,
+  DIV_SYSTEM_NAMCO_15XX,
+  DIV_SYSTEM_NAMCO_CUS30,
+  DIV_SYSTEM_MSM6258,
+  DIV_SYSTEM_MSM6295,
+  DIV_SYSTEM_RF5C68,
   0 // don't remove this last one!
 };
 

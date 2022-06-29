@@ -17,7 +17,6 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
-#include <imgui.h>
 #define _USE_MATH_DEFINES
 #include "gui.h"
 #include "../ta-log.h"
@@ -29,6 +28,30 @@
 
 inline float randRange(float min, float max) {
   return min+((float)rand()/(float)RAND_MAX)*(max-min);
+}
+
+void _pushPartBlend(const ImDrawList* drawList, const ImDrawCmd* cmd) {
+  if (cmd!=NULL) {
+    if (cmd->UserCallbackData!=NULL) {
+      ((FurnaceGUI*)cmd->UserCallbackData)->pushPartBlend();
+    }
+  }
+}
+
+void _popPartBlend(const ImDrawList* drawList, const ImDrawCmd* cmd) {
+  if (cmd!=NULL) {
+    if (cmd->UserCallbackData!=NULL) {
+      ((FurnaceGUI*)cmd->UserCallbackData)->popPartBlend();
+    }
+  }
+}
+
+void FurnaceGUI::pushPartBlend() {
+  SDL_SetRenderDrawBlendMode(sdlRend,SDL_BLENDMODE_ADD);
+}
+
+void FurnaceGUI::popPartBlend() {
+  SDL_SetRenderDrawBlendMode(sdlRend,SDL_BLENDMODE_BLEND);
 }
 
 // draw a pattern row
@@ -138,12 +161,12 @@ inline void FurnaceGUI::patternRow(int i, bool isPlaying, float lineHeight, int 
       ImGui::PushStyleColor(ImGuiCol_Header,uiColors[GUI_COLOR_PATTERN_CURSOR]);
       ImGui::PushStyleColor(ImGuiCol_HeaderActive,uiColors[GUI_COLOR_PATTERN_CURSOR_ACTIVE]);
       ImGui::PushStyleColor(ImGuiCol_HeaderHovered,uiColors[GUI_COLOR_PATTERN_CURSOR_HOVER]);
-      ImGui::Selectable(id,true,ImGuiSelectableFlags_NoPadWithHalfSpacing,threeChars);
+      ImGui::Selectable(id,true,ImGuiSelectableFlags_NoPadWithHalfSpacing,noteCellSize);
       demandX=ImGui::GetCursorPosX();
       ImGui::PopStyleColor(3);
     } else {
       if (selectedNote) ImGui::PushStyleColor(ImGuiCol_Header,uiColors[GUI_COLOR_PATTERN_SELECTION]);
-      ImGui::Selectable(id,isPushing || selectedNote,ImGuiSelectableFlags_NoPadWithHalfSpacing,threeChars);
+      ImGui::Selectable(id,isPushing || selectedNote,ImGuiSelectableFlags_NoPadWithHalfSpacing,noteCellSize);
       if (selectedNote) ImGui::PopStyleColor();
     }
     if (ImGui::IsItemClicked()) {
@@ -178,12 +201,12 @@ inline void FurnaceGUI::patternRow(int i, bool isPlaying, float lineHeight, int 
         ImGui::PushStyleColor(ImGuiCol_Header,uiColors[GUI_COLOR_PATTERN_CURSOR]);
         ImGui::PushStyleColor(ImGuiCol_HeaderActive,uiColors[GUI_COLOR_PATTERN_CURSOR_ACTIVE]);
         ImGui::PushStyleColor(ImGuiCol_HeaderHovered,uiColors[GUI_COLOR_PATTERN_CURSOR_HOVER]);
-        ImGui::Selectable(id,true,ImGuiSelectableFlags_NoPadWithHalfSpacing,twoChars);
+        ImGui::Selectable(id,true,ImGuiSelectableFlags_NoPadWithHalfSpacing,insCellSize);
         demandX=ImGui::GetCursorPosX();
         ImGui::PopStyleColor(3);
       } else {
         if (selectedIns) ImGui::PushStyleColor(ImGuiCol_Header,uiColors[GUI_COLOR_PATTERN_SELECTION]);
-        ImGui::Selectable(id,isPushing || selectedIns,ImGuiSelectableFlags_NoPadWithHalfSpacing,twoChars);
+        ImGui::Selectable(id,isPushing || selectedIns,ImGuiSelectableFlags_NoPadWithHalfSpacing,insCellSize);
         if (selectedIns) ImGui::PopStyleColor();
       }
       if (ImGui::IsItemClicked()) {
@@ -212,12 +235,12 @@ inline void FurnaceGUI::patternRow(int i, bool isPlaying, float lineHeight, int 
         ImGui::PushStyleColor(ImGuiCol_Header,uiColors[GUI_COLOR_PATTERN_CURSOR]);
         ImGui::PushStyleColor(ImGuiCol_HeaderActive,uiColors[GUI_COLOR_PATTERN_CURSOR_ACTIVE]);
         ImGui::PushStyleColor(ImGuiCol_HeaderHovered,uiColors[GUI_COLOR_PATTERN_CURSOR_HOVER]);
-        ImGui::Selectable(id,true,ImGuiSelectableFlags_NoPadWithHalfSpacing,twoChars);
+        ImGui::Selectable(id,true,ImGuiSelectableFlags_NoPadWithHalfSpacing,volCellSize);
         demandX=ImGui::GetCursorPosX();
         ImGui::PopStyleColor(3);
       } else {
         if (selectedVol) ImGui::PushStyleColor(ImGuiCol_Header,uiColors[GUI_COLOR_PATTERN_SELECTION]);
-        ImGui::Selectable(id,isPushing || selectedVol,ImGuiSelectableFlags_NoPadWithHalfSpacing,twoChars);
+        ImGui::Selectable(id,isPushing || selectedVol,ImGuiSelectableFlags_NoPadWithHalfSpacing,volCellSize);
         if (selectedVol) ImGui::PopStyleColor();
       }
       if (ImGui::IsItemClicked()) {
@@ -257,12 +280,12 @@ inline void FurnaceGUI::patternRow(int i, bool isPlaying, float lineHeight, int 
           ImGui::PushStyleColor(ImGuiCol_Header,uiColors[GUI_COLOR_PATTERN_CURSOR]);  
           ImGui::PushStyleColor(ImGuiCol_HeaderActive,uiColors[GUI_COLOR_PATTERN_CURSOR_ACTIVE]);
           ImGui::PushStyleColor(ImGuiCol_HeaderHovered,uiColors[GUI_COLOR_PATTERN_CURSOR_HOVER]);
-          ImGui::Selectable(id,true,ImGuiSelectableFlags_NoPadWithHalfSpacing,twoChars);
+          ImGui::Selectable(id,true,ImGuiSelectableFlags_NoPadWithHalfSpacing,effectCellSize);
           demandX=ImGui::GetCursorPosX();
           ImGui::PopStyleColor(3);
         } else {
           if (selectedEffect) ImGui::PushStyleColor(ImGuiCol_Header,uiColors[GUI_COLOR_PATTERN_SELECTION]);
-          ImGui::Selectable(id,isPushing || selectedEffect,ImGuiSelectableFlags_NoPadWithHalfSpacing,twoChars);
+          ImGui::Selectable(id,isPushing || selectedEffect,ImGuiSelectableFlags_NoPadWithHalfSpacing,effectCellSize);
           if (selectedEffect) ImGui::PopStyleColor();
         }
         if (ImGui::IsItemClicked()) {
@@ -283,12 +306,12 @@ inline void FurnaceGUI::patternRow(int i, bool isPlaying, float lineHeight, int 
           ImGui::PushStyleColor(ImGuiCol_Header,uiColors[GUI_COLOR_PATTERN_CURSOR]);  
           ImGui::PushStyleColor(ImGuiCol_HeaderActive,uiColors[GUI_COLOR_PATTERN_CURSOR_ACTIVE]);
           ImGui::PushStyleColor(ImGuiCol_HeaderHovered,uiColors[GUI_COLOR_PATTERN_CURSOR_HOVER]);
-          ImGui::Selectable(id,true,ImGuiSelectableFlags_NoPadWithHalfSpacing,twoChars);
+          ImGui::Selectable(id,true,ImGuiSelectableFlags_NoPadWithHalfSpacing,effectValCellSize);
           demandX=ImGui::GetCursorPosX();
           ImGui::PopStyleColor(3);
         } else {
           if (selectedEffectVal) ImGui::PushStyleColor(ImGuiCol_Header,uiColors[GUI_COLOR_PATTERN_SELECTION]);
-          ImGui::Selectable(id,isPushing || selectedEffectVal,ImGuiSelectableFlags_NoPadWithHalfSpacing,twoChars);
+          ImGui::Selectable(id,isPushing || selectedEffectVal,ImGuiSelectableFlags_NoPadWithHalfSpacing,effectValCellSize);
           if (selectedEffectVal) ImGui::PopStyleColor();
         }
         if (ImGui::IsItemClicked()) {
@@ -320,7 +343,13 @@ void FurnaceGUI::drawPattern() {
   bool inhibitMenu=false;
   float scrollX=0;
 
-  if (e->isPlaying() && followPattern && (!e->isStepping() || pendingStepUpdate)) cursor.y=oldRow+((pendingStepUpdate)?1:0);
+  if (e->isPlaying() && followPattern && (!e->isStepping() || pendingStepUpdate)) {
+    cursor.y=oldRow+((pendingStepUpdate)?1:0);
+    if (selStart.xCoarse==selEnd.xCoarse && selStart.xFine==selEnd.xFine && selStart.y==selEnd.y && !selecting) {
+      selStart=cursor;
+      selEnd=cursor;
+    }
+  }
   demandX=0;
   sel1=selStart;
   sel2=selEnd;
@@ -343,7 +372,7 @@ void FurnaceGUI::drawPattern() {
     sel2.xFine^=sel1.xFine;
   }
   ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,ImVec2(0.0f,0.0f));
-  if (ImGui::Begin("Pattern",&patternOpen,settings.avoidRaisingPattern?ImGuiWindowFlags_NoBringToFrontOnFocus:0)) {
+  if (ImGui::Begin("Pattern",&patternOpen,globalWinFlags|(settings.avoidRaisingPattern?ImGuiWindowFlags_NoBringToFrontOnFocus:0))) {
     //ImGui::SetWindowSize(ImVec2(scrW*dpiScale,scrH*dpiScale));
     patWindowPos=ImGui::GetWindowPos();
     patWindowSize=ImGui::GetWindowSize();
@@ -549,10 +578,24 @@ void FurnaceGUI::drawPattern() {
       threeChars=ImVec2(oneCharSize*3.0f,lineHeight);
       twoChars=ImVec2(oneCharSize*2.0f,lineHeight);
       //ImVec2 oneChar=ImVec2(oneCharSize,lineHeight);
+
+      noteCellSize=threeChars;
+      noteCellSize.x+=(float)settings.noteCellSpacing*dpiScale;
+      insCellSize=twoChars;
+      insCellSize.x+=(float)settings.insCellSpacing*dpiScale;
+      volCellSize=twoChars;
+      volCellSize.x+=(float)settings.volCellSpacing*dpiScale;
+      effectCellSize=twoChars;
+      effectCellSize.x+=(float)settings.effectCellSpacing*dpiScale;
+      effectValCellSize=twoChars;
+      effectValCellSize.x+=(float)settings.effectValCellSpacing*dpiScale;
+
       dummyRows=(ImGui::GetWindowSize().y/lineHeight)/2;
+
       // オップナー2608 i owe you one more for this horrible code
       // previous pattern
       ImGui::BeginDisabled();
+      ImGui::PushStyleVar(ImGuiStyleVar_FrameShading,0.0f);
       if (settings.viewPrevPattern) {
         if ((ord-1)>=0) for (int i=0; i<chans; i++) {
           patCache[i]=e->curPat[i].getPattern(e->curOrders->ord[i][ord-1],true);
@@ -590,6 +633,7 @@ void FurnaceGUI::drawPattern() {
         }
       }
       ImGui::EndDisabled();
+      ImGui::PopStyleVar();
       oldRow=curRow;
       if (demandScrollX) {
         int totalDemand=demandX-ImGui::GetScrollX();
@@ -671,11 +715,14 @@ void FurnaceGUI::drawPattern() {
         ImU32* color=noteGrad;
 
         switch (i.cmd) {
-          case DIV_CMD_NOTE_ON:
+          case DIV_CMD_NOTE_ON: {
+            float strength=CLAMP(i.value,0,119);
             partIcon=ICON_FA_ASTERISK;
-            life=96.0f;
+            life=80.0f+((i.value==DIV_NOTE_NULL)?0.0f:(strength*0.3f));
             lifeSpeed=3.0f;
+            num=6+(strength/16);
             break;
+          }
           case DIV_CMD_LEGATO:
             partIcon=ICON_FA_COG;
             color=insGrad;
@@ -773,7 +820,7 @@ void FurnaceGUI::drawPattern() {
 
       float frameTime=ImGui::GetIO().DeltaTime*60.0f;
 
-      // note slides
+      // note slides and vibrato
       ImVec2 arrowPoints[7];
       if (e->isPlaying()) for (int i=0; i<chans; i++) {
         if (!e->curSubSong->chanShow[i]) continue;
@@ -828,11 +875,30 @@ void FurnaceGUI::drawPattern() {
             }
           }
         }
+        if (ch->vibratoDepth>0) {
+          ImVec4 col=uiColors[GUI_COLOR_PATTERN_EFFECT_PITCH];
+          col.w*=0.2;
+          float width=patChanX[i+1]-patChanX[i];
+
+          particles.push_back(Particle(
+            pitchGrad,
+            ICON_FA_GLASS,
+            off.x+patChanX[i]+(width*0.5+0.5*sin(M_PI*(float)ch->vibratoPosGiant/64.0f)*width)-scrollX,
+            off.y+(ImGui::GetWindowHeight()*0.5f)+randRange(0,patFont->FontSize),
+            randRange(-4.0f,4.0f),
+            2.0f*(3.0f+(rand()%5)+ch->vibratoRate),
+            0.4f,
+            1.0f,
+            128.0f,
+            4.0f
+          ));
+        }
       }
 
       // particle simulation
       ImDrawList* fdl=ImGui::GetForegroundDrawList();
       if (!particles.empty()) WAKE_UP;
+      fdl->AddCallback(_pushPartBlend,this);
       for (size_t i=0; i<particles.size(); i++) {
         Particle& part=particles[i];
         if (part.update(frameTime)) {
@@ -849,6 +915,7 @@ void FurnaceGUI::drawPattern() {
           i--;
         }
       }
+      fdl->AddCallback(_popPartBlend,this);
     }
 
     ImGui::PopStyleColor(3);

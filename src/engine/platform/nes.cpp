@@ -65,7 +65,7 @@ const char** DivPlatformNES::getRegisterSheet() {
 const char* DivPlatformNES::getEffectName(unsigned char effect) {
   switch (effect) {
     case 0x11:
-      return "Write to delta modulation counter (0 to 7F)";
+      return "11xx: Write to delta modulation counter (0 to 7F)";
       break;
     case 0x12:
       return "12xx: Set duty cycle/noise mode (pulse: 0 to 3; noise: 0 or 1)";
@@ -230,7 +230,7 @@ void DivPlatformNES::tick(bool sysTick) {
     chan[i].std.next();
     if (chan[i].std.vol.had) {
       // ok, why are the volumes like that?
-      chan[i].outVol=MIN(15,chan[i].std.vol.val)-(15-(chan[i].vol&15));
+      chan[i].outVol=VOL_SCALE_LINEAR_BROKEN(chan[i].vol&15,MIN(15,chan[i].std.vol.val),15);
       if (chan[i].outVol<0) chan[i].outVol=0;
       if (i==2) { // triangle
         rWrite(0x4000+i*4,(chan[i].outVol==0)?0:255);
@@ -283,7 +283,7 @@ void DivPlatformNES::tick(bool sysTick) {
     if (chan[i].std.pitch.had) {
       if (chan[i].std.pitch.mode) {
         chan[i].pitch2+=chan[i].std.pitch.val;
-        CLAMP_VAR(chan[i].pitch2,-2048,2048);
+        CLAMP_VAR(chan[i].pitch2,-32768,32767);
       } else {
         chan[i].pitch2=chan[i].std.pitch.val;
       }
@@ -446,6 +446,9 @@ int DivPlatformNES::dispatch(DivCommand c) {
       chan[c.chan].active=true;
       chan[c.chan].keyOn=true;
       chan[c.chan].macroInit(parent->getIns(chan[c.chan].ins,DIV_INS_STD));
+      if (!parent->song.brokenOutVol && !chan[c.chan].std.vol.will) {
+        chan[c.chan].outVol=chan[c.chan].vol;
+      }
       if (c.chan==2) {
         rWrite(0x4000+c.chan*4,0xff);
       } else {
@@ -605,6 +608,10 @@ void DivPlatformNES::forceIns() {
 
 void* DivPlatformNES::getChanState(int ch) {
   return &chan[ch];
+}
+
+DivMacroInt* DivPlatformNES::getChanMacroInt(int ch) {
+  return &chan[ch].std;
 }
 
 DivDispatchOscBuffer* DivPlatformNES::getOscBuffer(int ch) {

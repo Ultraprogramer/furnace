@@ -124,7 +124,7 @@ void DivPlatformBubSysWSG::tick(bool sysTick) {
     if (chan[i].std.pitch.had) {
       if (chan[i].std.pitch.mode) {
         chan[i].pitch2+=chan[i].std.pitch.val;
-        CLAMP_VAR(chan[i].pitch2,-2048,2048);
+        CLAMP_VAR(chan[i].pitch2,-32768,32767);
       } else {
         chan[i].pitch2=chan[i].std.pitch.val;
       }
@@ -169,6 +169,9 @@ int DivPlatformBubSysWSG::dispatch(DivCommand c) {
       chan[c.chan].keyOn=true;
       rWrite(2+c.chan,(chan[c.chan].wave<<5)|chan[c.chan].vol);
       chan[c.chan].macroInit(ins);
+      if (!parent->song.brokenOutVol && !chan[c.chan].std.vol.will) {
+        chan[c.chan].outVol=chan[c.chan].vol;
+      }
       if (chan[c.chan].wave<0) {
         chan[c.chan].wave=0;
         chan[c.chan].ws.changeWave1(chan[c.chan].wave);
@@ -278,6 +281,10 @@ void* DivPlatformBubSysWSG::getChanState(int ch) {
   return &chan[ch];
 }
 
+DivMacroInt* DivPlatformBubSysWSG::getChanMacroInt(int ch) {
+  return &chan[ch].std;
+}
+
 DivDispatchOscBuffer* DivPlatformBubSysWSG::getOscBuffer(int ch) {
   return oscBuf[ch];
 }
@@ -299,7 +306,7 @@ void DivPlatformBubSysWSG::reset() {
   for (int i=0; i<2; i++) {
     chan[i]=DivPlatformBubSysWSG::Channel();
     chan[i].std.setEngine(parent);
-    chan[i].ws.setEngine(parent);
+    chan[i].ws.setEngine(parent,8);
     chan[i].ws.init(NULL,32,15,false);
   }
   if (dumpWrites) {

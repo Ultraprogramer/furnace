@@ -17,6 +17,7 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
+// TODO: new macro formula
 #include "segapcm.h"
 #include "../engine.h"
 #include <string.h>
@@ -84,10 +85,17 @@ void DivPlatformSegaPCM::tick(bool sysTick) {
   for (int i=0; i<16; i++) {
     chan[i].std.next();
 
-    // TODO: fix
-    /*if (chan[i].std.vol.had) {
-      chan[i].outVol=(chan[i].vol*MIN(127,chan[i].std.vol.val))/127;
-    }*/
+    if (parent->song.newSegaPCM) {
+      if (chan[i].std.vol.had) {
+        chan[i].outVol=(chan[i].vol*MIN(64,chan[i].std.vol.val))>>6;
+        chan[i].chVolL=(chan[i].outVol*chan[i].chPanL)/127;
+        chan[i].chVolR=(chan[i].outVol*chan[i].chPanR)/127;
+        if (dumpWrites) {
+          addWrite(0x10002+(i<<3),chan[i].chVolL);
+          addWrite(0x10003+(i<<3),chan[i].chVolR);
+        }
+      }
+    }
 
     if (chan[i].std.arp.had) {
       if (!chan[i].inPorta) {
@@ -106,14 +114,24 @@ void DivPlatformSegaPCM::tick(bool sysTick) {
     }
 
     if (chan[i].std.panL.had) {
-      chan[i].chVolL=chan[i].std.panL.val&127;
+      if (parent->song.newSegaPCM) {
+        chan[i].chPanL=chan[i].std.panL.val&127;
+        chan[i].chVolL=(chan[i].outVol*chan[i].chPanL)/127;
+      } else {
+        chan[i].chVolL=chan[i].std.panL.val&127;
+      }
       if (dumpWrites) {
         addWrite(0x10002+(i<<3),chan[i].chVolL);
       }
     }
 
     if (chan[i].std.panR.had) {
-      chan[i].chVolR=chan[i].std.panR.val&127;
+      if (parent->song.newSegaPCM) {
+        chan[i].chPanR=chan[i].std.panR.val&127;
+        chan[i].chVolR=(chan[i].outVol*chan[i].chPanR)/127;
+      } else {
+        chan[i].chVolR=chan[i].std.panR.val&127;
+      }
       if (dumpWrites) {
         addWrite(0x10003+(i<<3),chan[i].chVolR);
       }
@@ -122,7 +140,7 @@ void DivPlatformSegaPCM::tick(bool sysTick) {
     if (chan[i].std.pitch.had) {
       if (chan[i].std.pitch.mode) {
         chan[i].pitch2+=chan[i].std.pitch.val;
-        CLAMP_VAR(chan[i].pitch2,-2048,2048);
+        CLAMP_VAR(chan[i].pitch2,-32768,32767);
       } else {
         chan[i].pitch2=chan[i].std.pitch.val;
       }
@@ -169,6 +187,9 @@ int DivPlatformSegaPCM::dispatch(DivCommand c) {
             addWrite(0x10086+(c.chan<<3),3);
           }
           chan[c.chan].macroInit(NULL);
+          if (!parent->song.brokenOutVol && !chan[c.chan].std.vol.will) {
+            chan[c.chan].outVol=chan[c.chan].vol;
+          }
           break;
         }
         chan[c.chan].pcm.pos=0;
@@ -181,11 +202,13 @@ int DivPlatformSegaPCM::dispatch(DivCommand c) {
         chan[c.chan].macroInit(ins);
         if (dumpWrites) { // Sega PCM writes
           DivSample* s=parent->getSample(chan[c.chan].pcm.sample);
+          int actualLength=(int)s->length8;
+          if (actualLength>0xfeff) actualLength=0xfeff;
           addWrite(0x10086+(c.chan<<3),3+((s->offSegaPCM>>16)<<3));
           addWrite(0x10084+(c.chan<<3),(s->offSegaPCM)&0xff);
           addWrite(0x10085+(c.chan<<3),(s->offSegaPCM>>8)&0xff);
-          addWrite(0x10006+(c.chan<<3),MIN(255,((s->offSegaPCM&0xffff)+s->length8-1)>>8));
-          if (s->loopStart<0 || s->loopStart>=(int)s->length8) {
+          addWrite(0x10006+(c.chan<<3),MIN(255,((s->offSegaPCM&0xffff)+actualLength-1)>>8));
+          if (s->loopStart<0 || s->loopStart>=actualLength) {
             addWrite(0x10086+(c.chan<<3),2+((s->offSegaPCM>>16)<<3));
           } else {
             int loopPos=(s->offSegaPCM&0xffff)+s->loopStart+s->loopOffP;
@@ -212,11 +235,13 @@ int DivPlatformSegaPCM::dispatch(DivCommand c) {
         chan[c.chan].furnacePCM=false;
         if (dumpWrites) { // Sega PCM writes
           DivSample* s=parent->getSample(chan[c.chan].pcm.sample);
+          int actualLength=(int)s->length8;
+          if (actualLength>65536) actualLength=65536;
           addWrite(0x10086+(c.chan<<3),3+((s->offSegaPCM>>16)<<3));
           addWrite(0x10084+(c.chan<<3),(s->offSegaPCM)&0xff);
           addWrite(0x10085+(c.chan<<3),(s->offSegaPCM>>8)&0xff);
-          addWrite(0x10006+(c.chan<<3),MIN(255,((s->offSegaPCM&0xffff)+s->length8-1)>>8));
-          if (s->loopStart<0 || s->loopStart>=(int)s->length8) {
+          addWrite(0x10006+(c.chan<<3),MIN(255,((s->offSegaPCM&0xffff)+actualLength-1)>>8));
+          if (s->loopStart<0 || s->loopStart>=actualLength) {
             addWrite(0x10086+(c.chan<<3),2+((s->offSegaPCM>>16)<<3));
           } else {
             int loopPos=(s->offSegaPCM&0xffff)+s->loopStart+s->loopOffP;
@@ -253,8 +278,13 @@ int DivPlatformSegaPCM::dispatch(DivCommand c) {
       if (!chan[c.chan].std.vol.has) {
         chan[c.chan].outVol=c.value;
       }
-      chan[c.chan].chVolL=c.value;
-      chan[c.chan].chVolR=c.value;
+      if (parent->song.newSegaPCM) {
+        chan[c.chan].chVolL=(c.value*chan[c.chan].chPanL)/127;
+        chan[c.chan].chVolR=(c.value*chan[c.chan].chPanR)/127;
+      } else {
+        chan[c.chan].chVolL=c.value;
+        chan[c.chan].chVolR=c.value;
+      }
       if (dumpWrites) {
         addWrite(0x10002+(c.chan<<3),chan[c.chan].chVolL);
         addWrite(0x10003+(c.chan<<3),chan[c.chan].chVolR);
@@ -272,8 +302,15 @@ int DivPlatformSegaPCM::dispatch(DivCommand c) {
       chan[c.chan].ins=c.value;
       break;
     case DIV_CMD_PANNING: {
-      chan[c.chan].chVolL=c.value>>1;
-      chan[c.chan].chVolR=c.value2>>1;
+      if (parent->song.newSegaPCM) {
+        chan[c.chan].chPanL=c.value>>1;
+        chan[c.chan].chPanR=c.value2>>1;
+        chan[c.chan].chVolL=(chan[c.chan].outVol*chan[c.chan].chPanL)/127;
+        chan[c.chan].chVolR=(chan[c.chan].outVol*chan[c.chan].chPanR)/127;
+      } else {
+        chan[c.chan].chVolL=c.value>>1;
+        chan[c.chan].chVolR=c.value2>>1;
+      }
       if (dumpWrites) {
         addWrite(0x10002+(c.chan<<3),chan[c.chan].chVolL);
         addWrite(0x10003+(c.chan<<3),chan[c.chan].chVolR);
@@ -361,6 +398,10 @@ void DivPlatformSegaPCM::notifyInsChange(int ins) {
 
 void* DivPlatformSegaPCM::getChanState(int ch) {
   return &chan[ch];
+}
+
+DivMacroInt* DivPlatformSegaPCM::getChanMacroInt(int ch) {
+  return &chan[ch].std;
 }
 
 DivDispatchOscBuffer* DivPlatformSegaPCM::getOscBuffer(int ch) {

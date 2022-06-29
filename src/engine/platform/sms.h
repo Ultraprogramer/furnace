@@ -23,6 +23,10 @@
 #include "../dispatch.h"
 #include "../macroInt.h"
 #include "sound/sn76496.h"
+extern "C" {
+  #include "../../../extern/Nuked-PSG/ympsg.h"
+}
+#include <queue>
 
 class DivPlatformSMS: public DivDispatch {
   struct Channel {
@@ -54,23 +58,41 @@ class DivPlatformSMS: public DivDispatch {
   Channel chan[4];
   DivDispatchOscBuffer* oscBuf[4];
   bool isMuted[4];
+  unsigned char lastPan;
   unsigned char oldValue; 
   unsigned char snNoiseMode;
+  int divider=16;
+  double toneDivider=64.0;
+  double noiseDivider=64.0;
   bool updateSNMode;
   bool resetPhase;
   bool isRealSN;
+  bool stereo;
+  bool nuked;
   sn76496_base_device* sn;
+  ympsg_t sn_nuked;
+  struct QueuedWrite {
+    unsigned short addr;
+    unsigned char val;
+    bool addrOrVal;
+    QueuedWrite(unsigned short a, unsigned char v): addr(a), val(v), addrOrVal(false) {}
+  };
+  std::queue<QueuedWrite> writes;
   friend void putDispatchChan(void*,int,int);
+
+  void acquire_nuked(short* bufL, short* bufR, size_t start, size_t len);
+  void acquire_mame(short* bufL, short* bufR, size_t start, size_t len);
   public:
-    int acquireOne();
     void acquire(short* bufL, short* bufR, size_t start, size_t len);
     int dispatch(DivCommand c);
     void* getChanState(int chan);
+    DivMacroInt* getChanMacroInt(int ch);
     DivDispatchOscBuffer* getOscBuffer(int chan);
     void reset();
     void forceIns();
     void tick(bool sysTick=true);
     void muteChannel(int ch, bool mute);
+    bool isStereo();
     bool keyOffAffectsArp(int ch);
     bool keyOffAffectsPorta(int ch);
     int getPortaFloor(int ch);
@@ -80,6 +102,7 @@ class DivPlatformSMS: public DivDispatch {
     void poke(std::vector<DivRegWrite>& wlist);
     const char** getRegisterSheet();
     const char* getEffectName(unsigned char effect);
+    void setNuked(bool value);
     int init(DivEngine* parent, int channels, int sugRate, unsigned int flags);
     void quit();
     ~DivPlatformSMS();

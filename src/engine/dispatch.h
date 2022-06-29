@@ -59,6 +59,7 @@ enum DivDispatchCmds {
   DIV_CMD_SAMPLE_FREQ, // (frequency)
   DIV_CMD_SAMPLE_BANK, // (bank)
   DIV_CMD_SAMPLE_POS, // (pos)
+  DIV_CMD_SAMPLE_DIR, // (direction)
 
   DIV_CMD_FM_HARD_RESET, // (enabled)
   DIV_CMD_FM_LFO, // (speed)
@@ -169,6 +170,13 @@ enum DivDispatchCmds {
   DIV_CMD_N163_GLOBAL_WAVE_LOADLEN,
   DIV_CMD_N163_GLOBAL_WAVE_LOADMODE,
 
+  DIV_CMD_SU_SWEEP_PERIOD_LOW, // (which, val)
+  DIV_CMD_SU_SWEEP_PERIOD_HIGH, // (which, val)
+  DIV_CMD_SU_SWEEP_BOUND, // (which, val)
+  DIV_CMD_SU_SWEEP_ENABLE, // (which, val)
+  DIV_CMD_SU_SYNC_PERIOD_LOW,
+  DIV_CMD_SU_SYNC_PERIOD_HIGH,
+
   DIV_ALWAYS_SET_VOLUME, // () -> alwaysSetVol
 
   DIV_CMD_MAX
@@ -215,6 +223,8 @@ struct DivRegWrite {
    *   - data is the sample rate
    * - 0xffffxx02: stop sample playback
    *   - xx is the instance ID
+   * - 0xffffxx03: set sample playback direction
+   *   - x is the instance ID
    * - 0xffffffff: reset
    */
   unsigned int addr;
@@ -513,6 +523,11 @@ class DivDispatch {
 
 // this is a special case definition. only use it for f-num/block-based chips.
 #define NOTE_FNUM_BLOCK(x,bits) parent->calcBaseFreqFNumBlock(chipClock,CHIP_FREQBASE,x,bits)
+
+// this is for volume scaling calculation.
+#define VOL_SCALE_LINEAR_BROKEN(x,y,range) ((parent->song.newVolumeScaling)?(((x)*(y))/(range)):(CLAMP(((x)+(y))-(range),0,(range))))
+#define VOL_SCALE_LINEAR(x,y,range) (((x)*(y))/(range))
+#define VOL_SCALE_LOG(x,y,range) ((parent->song.newVolumeScaling)?(CLAMP(((x)+(y))-(range),0,(range))):(((x)*(y))/(range)))
 
 // these are here for convenience.
 // it is encouraged to use these, since you get an exact value this way.

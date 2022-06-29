@@ -29,7 +29,7 @@
 class DivPlatformSCC: public DivDispatch {
   struct Channel {
     int freq, baseFreq, pitch, pitch2, note, ins;
-    bool active, insChanged, freqChanged, inPorta;
+    bool active, insChanged, freqChanged, freqInit, inPorta;
     signed char vol, outVol, wave;
     signed char waveROM[32] = {0}; // 4 bit PROM per channel on bubble system
     DivMacroInt std;
@@ -48,6 +48,7 @@ class DivPlatformSCC: public DivDispatch {
       active(false),
       insChanged(true),
       freqChanged(false),
+      freqInit(false),
       inPorta(false),
       vol(15),
       outVol(15),
@@ -69,6 +70,7 @@ class DivPlatformSCC: public DivDispatch {
     void acquire(short* bufL, short* bufR, size_t start, size_t len);
     int dispatch(DivCommand c);
     void* getChanState(int chan);
+    DivMacroInt* getChanMacroInt(int ch);
     DivDispatchOscBuffer* getOscBuffer(int chan);
     unsigned char* getRegisterPool();
     int getRegisterPoolSize();
@@ -83,6 +85,7 @@ class DivPlatformSCC: public DivDispatch {
     void poke(std::vector<DivRegWrite>& wlist);
     const char** getRegisterSheet();
     const char* getEffectName(unsigned char effect);
+    void setFlags(unsigned int flags);
     int init(DivEngine* parent, int channels, int sugRate, unsigned int flags);
     void setChipModel(bool isPlus);
     void quit();

@@ -27,7 +27,7 @@ class DivPlatformGenesisExt: public DivPlatformGenesis {
     unsigned char freqH, freqL;
     int freq, baseFreq, pitch, pitch2, portaPauseFreq, ins;
     signed char konCycles;
-    bool active, insChanged, freqChanged, keyOn, keyOff, portaPause;
+    bool active, insChanged, freqChanged, keyOn, keyOff, portaPause, inPorta;
     int vol;
     unsigned char pan;
     OpChannel():
@@ -45,6 +45,7 @@ class DivPlatformGenesisExt: public DivPlatformGenesis {
       keyOn(false),
       keyOff(false),
       portaPause(false),
+      inPorta(false),
       vol(0),
       pan(3) {}
   };
@@ -54,6 +55,7 @@ class DivPlatformGenesisExt: public DivPlatformGenesis {
   public:
     int dispatch(DivCommand c);
     void* getChanState(int chan);
+    DivMacroInt* getChanMacroInt(int ch);
     DivDispatchOscBuffer* getOscBuffer(int chan);
     void reset();
     void forceIns();

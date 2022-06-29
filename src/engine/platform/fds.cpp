@@ -139,7 +139,7 @@ void DivPlatformFDS::tick(bool sysTick) {
     chan[i].std.next();
     if (chan[i].std.vol.had) {
       // ok, why are the volumes like that?
-      chan[i].outVol=MIN(32,chan[i].std.vol.val)-(32-MIN(32,chan[i].vol));
+      chan[i].outVol=VOL_SCALE_LINEAR_BROKEN(chan[i].vol,chan[i].std.vol.val,32);
       if (chan[i].outVol<0) chan[i].outVol=0;
       rWrite(0x4080,0x80|chan[i].outVol);
     }
@@ -185,7 +185,7 @@ void DivPlatformFDS::tick(bool sysTick) {
     if (chan[i].std.pitch.had) {
       if (chan[i].std.pitch.mode) {
         chan[i].pitch2+=chan[i].std.pitch.val;
-        CLAMP_VAR(chan[i].pitch2,-2048,2048);
+        CLAMP_VAR(chan[i].pitch2,-32768,32767);
       } else {
         chan[i].pitch2=chan[i].std.pitch.val;
       }
@@ -285,6 +285,9 @@ int DivPlatformFDS::dispatch(DivCommand c) {
       chan[c.chan].active=true;
       chan[c.chan].keyOn=true;
       chan[c.chan].macroInit(ins);
+      if (!parent->song.brokenOutVol && !chan[c.chan].std.vol.will) {
+        chan[c.chan].outVol=chan[c.chan].vol;
+      }
       if (chan[c.chan].wave<0) {
         chan[c.chan].wave=0;
         ws.changeWave1(chan[c.chan].wave);
@@ -433,6 +436,10 @@ void* DivPlatformFDS::getChanState(int ch) {
   return &chan[ch];
 }
 
+DivMacroInt* DivPlatformFDS::getChanMacroInt(int ch) {
+  return &chan[ch].std;
+}
+
 DivDispatchOscBuffer* DivPlatformFDS::getOscBuffer(int ch) {
   return oscBuf;
 }
@@ -496,6 +503,10 @@ void DivPlatformFDS::notifyInsDeletion(void* ins) {
   for (int i=0; i<1; i++) {
     chan[i].std.notifyInsDeletion((DivInstrument*)ins);
   }
+}
+
+float DivPlatformFDS::getPostAmp() {
+  return useNP?2.0f:1.0f;
 }
 
 void DivPlatformFDS::poke(unsigned int addr, unsigned short val) {

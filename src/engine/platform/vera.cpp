@@ -201,7 +201,7 @@ void DivPlatformVERA::tick(bool sysTick) {
     if (chan[i].std.pitch.had) {
       if (chan[i].std.pitch.mode) {
         chan[i].pitch2+=chan[i].std.pitch.val;
-        CLAMP_VAR(chan[i].pitch2,-2048,2048);
+        CLAMP_VAR(chan[i].pitch2,-32768,32767);
       } else {
         chan[i].pitch2=chan[i].std.pitch.val;
       }
@@ -283,6 +283,9 @@ int DivPlatformVERA::dispatch(DivCommand c) {
       }
       chan[c.chan].active=true;
       chan[c.chan].macroInit(parent->getIns(chan[c.chan].ins,DIV_INS_VERA));
+      if (!parent->song.brokenOutVol && !chan[c.chan].std.vol.will) {
+        chan[c.chan].outVol=chan[c.chan].vol;
+      }
       break;
     case DIV_CMD_NOTE_OFF:
       chan[c.chan].active=false;
@@ -392,6 +395,10 @@ int DivPlatformVERA::dispatch(DivCommand c) {
 
 void* DivPlatformVERA::getChanState(int ch) {
   return &chan[ch];
+}
+
+DivMacroInt* DivPlatformVERA::getChanMacroInt(int ch) {
+  return &chan[ch].std;
 }
 
 DivDispatchOscBuffer* DivPlatformVERA::getOscBuffer(int ch) {

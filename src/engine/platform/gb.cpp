@@ -204,7 +204,7 @@ void DivPlatformGB::tick(bool sysTick) {
     if (chan[i].std.pitch.had) {
       if (chan[i].std.pitch.mode) {
         chan[i].pitch2+=chan[i].std.pitch.val;
-        CLAMP_VAR(chan[i].pitch2,-2048,2048);
+        CLAMP_VAR(chan[i].pitch2,-32768,32767);
       } else {
         chan[i].pitch2=chan[i].std.pitch.val;
       }
@@ -431,6 +431,10 @@ void DivPlatformGB::forceIns() {
 
 void* DivPlatformGB::getChanState(int ch) {
   return &chan[ch];
+}
+
+DivMacroInt* DivPlatformGB::getChanMacroInt(int ch) {
+  return &chan[ch].std;
 }
 
 DivDispatchOscBuffer* DivPlatformGB::getOscBuffer(int ch) {

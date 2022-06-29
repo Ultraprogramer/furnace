@@ -21,6 +21,9 @@
 #include "engine.h"
 #include "platform/genesis.h"
 #include "platform/genesisext.h"
+#include "platform/msm6258.h"
+#include "platform/msm6295.h"
+#include "platform/namcowsg.h"
 #include "platform/sms.h"
 #include "platform/opll.h"
 #include "platform/gb.h"
@@ -32,6 +35,7 @@
 #include "platform/ym2203.h"
 #include "platform/ym2203ext.h"
 #include "platform/ym2608.h"
+#include "platform/ym2608ext.h"
 #include "platform/ym2610.h"
 #include "platform/ym2610ext.h"
 #include "platform/ym2610b.h"
@@ -58,6 +62,8 @@
 #include "platform/fds.h"
 #include "platform/mmc5.h"
 #include "platform/scc.h"
+#include "platform/ymz280b.h"
+#include "platform/rf5c68.h"
 #include "platform/dummy.h"
 #include "../ta-log.h"
 #include "platform/zxbeeper.h"
@@ -178,13 +184,26 @@ void DivDispatchContainer::init(DivSystem sys, DivEngine* eng, int chanCount, do
     case DIV_SYSTEM_YM2612:
       dispatch=new DivPlatformGenesis;
       ((DivPlatformGenesis*)dispatch)->setYMFM(eng->getConfInt("ym2612Core",0));
+      ((DivPlatformGenesis*)dispatch)->setSoftPCM(false);
       break;
     case DIV_SYSTEM_YM2612_EXT:
       dispatch=new DivPlatformGenesisExt;
       ((DivPlatformGenesisExt*)dispatch)->setYMFM(eng->getConfInt("ym2612Core",0));
+      ((DivPlatformGenesisExt*)dispatch)->setSoftPCM(false);
+      break;
+    case DIV_SYSTEM_YM2612_FRAC:
+      dispatch=new DivPlatformGenesis;
+      ((DivPlatformGenesis*)dispatch)->setYMFM(eng->getConfInt("ym2612Core",0));
+      ((DivPlatformGenesis*)dispatch)->setSoftPCM(true);
+      break;
+    case DIV_SYSTEM_YM2612_FRAC_EXT:
+      dispatch=new DivPlatformGenesisExt;
+      ((DivPlatformGenesisExt*)dispatch)->setYMFM(eng->getConfInt("ym2612Core",0));
+      ((DivPlatformGenesisExt*)dispatch)->setSoftPCM(true);
       break;
     case DIV_SYSTEM_SMS:
       dispatch=new DivPlatformSMS;
+      ((DivPlatformSMS*)dispatch)->setNuked(eng->getConfInt("snCore",0));
       break;
     case DIV_SYSTEM_GB:
       dispatch=new DivPlatformGB;
@@ -247,6 +266,9 @@ void DivDispatchContainer::init(DivSystem sys, DivEngine* eng, int chanCount, do
     case DIV_SYSTEM_PC98:
       dispatch=new DivPlatformYM2608;
       break;
+    case DIV_SYSTEM_PC98_EXT:
+      dispatch=new DivPlatformYM2608Ext;
+      break;
     case DIV_SYSTEM_OPLL:
     case DIV_SYSTEM_OPLL_DRUMS:
     case DIV_SYSTEM_VRC7:
@@ -290,10 +312,7 @@ void DivDispatchContainer::init(DivSystem sys, DivEngine* eng, int chanCount, do
       dispatch=new DivPlatformTX81Z;
       break;
     case DIV_SYSTEM_SAA1099: {
-      int saaCore=eng->getConfInt("saaCore",1);
-      if (saaCore<0 || saaCore>2) saaCore=0;
       dispatch=new DivPlatformSAA1099;
-      ((DivPlatformSAA1099*)dispatch)->setCore((DivSAACores)saaCore);
       break;
     }
     case DIV_SYSTEM_PCSPKR:
@@ -347,8 +366,34 @@ void DivDispatchContainer::init(DivSystem sys, DivEngine* eng, int chanCount, do
       dispatch=new DivPlatformSCC;
       ((DivPlatformSCC*)dispatch)->setChipModel(true);
       break;
+    case DIV_SYSTEM_YMZ280B:
+      dispatch=new DivPlatformYMZ280B;
+      ((DivPlatformYMZ280B*)dispatch)->setChipModel(280);
+      break;
+    case DIV_SYSTEM_RF5C68:
+      dispatch=new DivPlatformRF5C68;
+      break;
     case DIV_SYSTEM_SOUND_UNIT:
       dispatch=new DivPlatformSoundUnit;
+      break;
+    case DIV_SYSTEM_MSM6258:
+      dispatch=new DivPlatformMSM6258;
+      break;
+    case DIV_SYSTEM_MSM6295:
+      dispatch=new DivPlatformMSM6295;
+      break;
+    case DIV_SYSTEM_NAMCO:
+      dispatch=new DivPlatformNamcoWSG;
+      // Pac-Man (TODO: support Pole Position?)
+      ((DivPlatformNamcoWSG*)dispatch)->setDeviceType(1);
+      break;
+    case DIV_SYSTEM_NAMCO_15XX:
+      dispatch=new DivPlatformNamcoWSG;
+      ((DivPlatformNamcoWSG*)dispatch)->setDeviceType(15);
+      break;
+    case DIV_SYSTEM_NAMCO_CUS30:
+      dispatch=new DivPlatformNamcoWSG;
+      ((DivPlatformNamcoWSG*)dispatch)->setDeviceType(30);
       break;
     case DIV_SYSTEM_DUMMY:
       dispatch=new DivPlatformDummy;

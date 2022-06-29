@@ -22,38 +22,6 @@
 #include <string.h>
 #include <math.h>
 
-#include "fmshared_OPM.h"
-
-static unsigned short chanOffs[8]={
-  0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07
-};
-static unsigned short opOffs[4]={
-  0x00, 0x08, 0x10, 0x18
-};
-static bool isOutput[8][4]={
-  // 1     3     2    4
-  {false,false,false,true},
-  {false,false,false,true},
-  {false,false,false,true},
-  {false,false,false,true},
-  {false,false,true ,true},
-  {false,true ,true ,true},
-  {false,true ,true ,true},
-  {true ,true ,true ,true},
-};
-static unsigned char dtTable[8]={
-  7,6,5,0,1,2,3,4
-};
-
-static int orderedOps[4]={
-  0,2,1,3
-};
-
-#define rWrite(a,v) if (!skipRegisterWrites) {pendingWrites[a]=v;}
-#define immWrite(a,v) if (!skipRegisterWrites) {writes.emplace(a,v); if (dumpWrites) {addWrite(a,v);} }
-
-#define NOTE_LINEAR(x) (((x)<<6)+baseFreqOff+log2(parent->song.tuning/440.0)*12.0*64.0)
-
 const char* regCheatSheetOPM[]={
   "Test", "00",
   "NoteCtl", "08",
@@ -198,7 +166,7 @@ void DivPlatformArcade::acquire_nuked(short* bufL, short* bufR, size_t start, si
           OPM_Write(&fm,1,w.val);
           regPool[w.addr&0xff]=w.val;
           //printf("write: %x = %.2x\n",w.addr,w.val);
-          writes.pop();
+          writes.pop_front();
         } else {
           OPM_Write(&fm,0,w.addr);
           w.addrOrVal=true;
@@ -239,7 +207,7 @@ void DivPlatformArcade::acquire_ymfm(short* bufL, short* bufR, size_t start, siz
         fm_ymfm->write(0x0+((w.addr>>8)<<1),w.addr);
         fm_ymfm->write(0x1+((w.addr>>8)<<1),w.val);
         regPool[w.addr&0xff]=w.val;
-        writes.pop();
+        writes.pop_front();
         delay=1;
       }
     }
@@ -284,12 +252,12 @@ void DivPlatformArcade::tick(bool sysTick) {
     chan[i].std.next();
 
     if (chan[i].std.vol.had) {
-      chan[i].outVol=(chan[i].vol*MIN(127,chan[i].std.vol.val))/127;
+      chan[i].outVol=VOL_SCALE_LOG(chan[i].vol,MIN(127,chan[i].std.vol.val),127);
       for (int j=0; j<4; j++) {
         unsigned short baseAddr=chanOffs[i]|opOffs[j];
         DivInstrumentFM::Operator& op=chan[i].state.op[j];
         if (isOutput[chan[i].state.alg][j]) {
-          rWrite(baseAddr+ADDR_TL,127-(((127-op.tl)*(chan[i].outVol&0x7f))/127));
+          rWrite(baseAddr+ADDR_TL,127-VOL_SCALE_LOG(127-op.tl,chan[i].outVol&0x7f,127));
         } else {
           rWrite(baseAddr+ADDR_TL,op.tl);
         }
@@ -337,7 +305,7 @@ void DivPlatformArcade::tick(bool sysTick) {
     if (chan[i].std.pitch.had) {
       if (chan[i].std.pitch.mode) {
         chan[i].pitch2+=chan[i].std.pitch.val;
-        CLAMP_VAR(chan[i].pitch2,-2048,2048);
+        CLAMP_VAR(chan[i].pitch2,-32768,32767);
       } else {
         chan[i].pitch2=chan[i].std.pitch.val;
       }
@@ -345,7 +313,7 @@ void DivPlatformArcade::tick(bool sysTick) {
     }
 
     if (chan[i].std.phaseReset.had) {
-      if (chan[i].std.phaseReset.val==1) {
+      if (chan[i].std.phaseReset.val==1 && chan[i].active) {
         chan[i].keyOn=true;
       }
     }
@@ -378,7 +346,7 @@ void DivPlatformArcade::tick(bool sysTick) {
           rWrite(baseAddr+ADDR_TL,127);
         } else {
           if (isOutput[chan[i].state.alg][j]) {
-            rWrite(baseAddr+ADDR_TL,127-(((127-op.tl)*(chan[i].outVol&0x7f))/127));
+            rWrite(baseAddr+ADDR_TL,127-VOL_SCALE_LOG(127-op.tl,chan[i].outVol&0x7f,127));
           } else {
             rWrite(baseAddr+ADDR_TL,op.tl);
           }
@@ -432,7 +400,7 @@ void DivPlatformArcade::tick(bool sysTick) {
       if (m.tl.had) {
         op.tl=127-m.tl.val;
         if (isOutput[chan[i].state.alg][j]) {
-          rWrite(baseAddr+ADDR_TL,127-(((127-op.tl)*(chan[i].outVol&0x7f))/127));
+          rWrite(baseAddr+ADDR_TL,127-VOL_SCALE_LOG(127-op.tl,chan[i].outVol&0x7f,127));
         } else {
           rWrite(baseAddr+ADDR_TL,op.tl);
         }
@@ -528,7 +496,7 @@ int DivPlatformArcade::dispatch(DivCommand c) {
         DivInstrumentFM::Operator op=chan[c.chan].state.op[i];
         if (isOutput[chan[c.chan].state.alg][i]) {
           if (!chan[c.chan].active || chan[c.chan].insChanged) {
-            rWrite(baseAddr+ADDR_TL,127-(((127-op.tl)*(chan[c.chan].outVol&0x7f))/127));
+            rWrite(baseAddr+ADDR_TL,127-VOL_SCALE_LOG(127-op.tl,chan[c.chan].outVol&0x7f,127));
           }
         } else {
           if (chan[c.chan].insChanged) {
@@ -585,7 +553,7 @@ int DivPlatformArcade::dispatch(DivCommand c) {
         unsigned short baseAddr=chanOffs[c.chan]|opOffs[i];
         DivInstrumentFM::Operator& op=chan[c.chan].state.op[i];
         if (isOutput[chan[c.chan].state.alg][i]) {
-          rWrite(baseAddr+ADDR_TL,127-(((127-op.tl)*(chan[c.chan].outVol&0x7f))/127));
+          rWrite(baseAddr+ADDR_TL,127-VOL_SCALE_LOG(127-op.tl,chan[c.chan].outVol&0x7f,127));
         } else {
           rWrite(baseAddr+ADDR_TL,op.tl);
         }
@@ -676,7 +644,7 @@ int DivPlatformArcade::dispatch(DivCommand c) {
       DivInstrumentFM::Operator& op=chan[c.chan].state.op[orderedOps[c.value]];
       op.tl=c.value2;
       if (isOutput[chan[c.chan].state.alg][c.value]) {
-        rWrite(baseAddr+ADDR_TL,127-(((127-op.tl)*(chan[c.chan].outVol&0x7f))/127));
+        rWrite(baseAddr+ADDR_TL,127-VOL_SCALE_LOG(127-op.tl,chan[c.chan].outVol&0x7f,127));
       } else {
         rWrite(baseAddr+ADDR_TL,op.tl);
       }
@@ -876,7 +844,7 @@ void DivPlatformArcade::forceIns() {
       unsigned short baseAddr=chanOffs[i]|opOffs[j];
       DivInstrumentFM::Operator op=chan[i].state.op[j];
       if (isOutput[chan[i].state.alg][j]) {
-        rWrite(baseAddr+ADDR_TL,127-(((127-op.tl)*(chan[i].outVol&0x7f))/127));
+        rWrite(baseAddr+ADDR_TL,127-VOL_SCALE_LOG(127-op.tl,chan[i].outVol&0x7f,127));
       } else {
         rWrite(baseAddr+ADDR_TL,op.tl);
       }
@@ -913,6 +881,10 @@ void* DivPlatformArcade::getChanState(int ch) {
   return &chan[ch];
 }
 
+DivMacroInt* DivPlatformArcade::getChanMacroInt(int ch) {
+  return &chan[ch].std;
+}
+
 DivDispatchOscBuffer* DivPlatformArcade::getOscBuffer(int ch) {
   return oscBuf[ch];
 }
@@ -934,7 +906,7 @@ void DivPlatformArcade::poke(std::vector<DivRegWrite>& wlist) {
 }
 
 void DivPlatformArcade::reset() {
-  while (!writes.empty()) writes.pop();
+  while (!writes.empty()) writes.pop_front();
   memset(regPool,0,256);
   if (useYMFM) {
     fm_ymfm->reset();
@@ -974,15 +946,20 @@ void DivPlatformArcade::reset() {
 }
 
 void DivPlatformArcade::setFlags(unsigned int flags) {
-  if (flags==2) {
-    chipClock=4000000.0;
-    baseFreqOff=-122;
-  } else if (flags==1) {
-    chipClock=COLOR_PAL*4.0/5.0;
-    baseFreqOff=12;
-  } else {
-    chipClock=COLOR_NTSC;
-    baseFreqOff=0;
+  switch (flags&0xff) {
+    default:
+    case 0:
+      chipClock=COLOR_NTSC;
+      baseFreqOff=0;
+      break;
+    case 1:
+      chipClock=COLOR_PAL*4.0/5.0;
+      baseFreqOff=12;
+      break;
+    case 2:
+      chipClock=4000000.0;
+      baseFreqOff=-122;
+      break;
   }
   rate=chipClock/64;
   for (int i=0; i<8; i++) {

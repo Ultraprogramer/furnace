@@ -207,7 +207,7 @@ void DivPlatformAmiga::tick(bool sysTick) {
     if (chan[i].std.pitch.had) {
       if (chan[i].std.pitch.mode) {
         chan[i].pitch2+=chan[i].std.pitch.val;
-        CLAMP_VAR(chan[i].pitch2,-2048,2048);
+        CLAMP_VAR(chan[i].pitch2,-32768,32767);
       } else {
         chan[i].pitch2=chan[i].std.pitch.val;
       }
@@ -271,6 +271,9 @@ int DivPlatformAmiga::dispatch(DivCommand c) {
       chan[c.chan].active=true;
       chan[c.chan].keyOn=true;
       chan[c.chan].macroInit(ins);
+      if (!parent->song.brokenOutVol && !chan[c.chan].std.vol.will) {
+        chan[c.chan].outVol=chan[c.chan].vol;
+      }
       if (chan[c.chan].useWave) {
         chan[c.chan].ws.init(ins,chan[c.chan].audLen<<1,255,chan[c.chan].insChanged);
       }
@@ -422,6 +425,10 @@ bool DivPlatformAmiga::isStereo() {
 
 bool DivPlatformAmiga::keyOffAffectsArp(int ch) {
   return true;
+}
+
+DivMacroInt* DivPlatformAmiga::getChanMacroInt(int ch) {
+  return &chan[ch].std;
 }
 
 void DivPlatformAmiga::notifyInsChange(int ins) {
