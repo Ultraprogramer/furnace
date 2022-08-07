@@ -387,8 +387,12 @@ void DivInstrument::putInsData(SafeWriter* w) {
   // sample map
   w->writeC(amiga.useNoteMap);
   if (amiga.useNoteMap) {
-    w->write(amiga.noteFreq,120*sizeof(unsigned int));
-    w->write(amiga.noteMap,120*sizeof(short));
+    for (int note=0; note<120; note++) {
+      w->writeI(amiga.noteMap[note].freq);
+    }
+    for (int note=0; note<120; note++) {
+      w->writeS(amiga.noteMap[note].map);
+    }
   }
 
   // N163
@@ -522,6 +526,17 @@ void DivInstrument::putInsData(SafeWriter* w) {
   w->writeC(multipcm.am);
   for (int j=0; j<23; j++) { // reserved
     w->writeC(0);
+  }
+
+  // Sound Unit
+  w->writeC(su.useSample);
+  w->writeC(su.switchRoles);
+
+  // GB hardware sequence
+  w->writeC(gb.hwSeqLen);
+  for (int i=0; i<gb.hwSeqLen; i++) {
+    w->writeC(gb.hwSeq[i].cmd);
+    w->writeS(gb.hwSeq[i].data);
   }
 
   blockEndSeek=w->tell();
@@ -932,8 +947,12 @@ DivDataErrors DivInstrument::readInsData(SafeReader& reader, short version) {
   if (version>=67) {
     amiga.useNoteMap=reader.readC();
     if (amiga.useNoteMap) {
-      reader.read(amiga.noteFreq,120*sizeof(unsigned int));
-      reader.read(amiga.noteMap,120*sizeof(short));
+      for (int note=0; note<120; note++) {
+        amiga.noteMap[note].freq=reader.readI();
+      }
+      for (int note=0; note<120; note++) {
+        amiga.noteMap[note].map=reader.readS();
+      }
     }
   }
 
@@ -1065,6 +1084,21 @@ DivDataErrors DivInstrument::readInsData(SafeReader& reader, short version) {
     multipcm.am=reader.readC();
     // reserved
     for (int k=0; k<23; k++) reader.readC();
+  }
+
+  // Sound Unit
+  if (version>=104) {
+    su.useSample=reader.readC();
+    su.switchRoles=reader.readC();
+  }
+
+  // GB hardware sequence
+  if (version>=105) {
+    gb.hwSeqLen=reader.readC();
+    for (int i=0; i<gb.hwSeqLen; i++) {
+      gb.hwSeq[i].cmd=reader.readC();
+      gb.hwSeq[i].data=reader.readS();
+    }
   }
 
   return DIV_DATA_SUCCESS;

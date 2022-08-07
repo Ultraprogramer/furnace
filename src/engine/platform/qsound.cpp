@@ -301,7 +301,7 @@ void DivPlatformQSound::tick(bool sysTick) {
       qsound_bank = 0x8000 | (s->offQSound >> 16);
       qsound_addr = s->offQSound & 0xffff;
 
-      int length = s->samples;
+      int length = s->getEndPosition();
       if (length > 65536 - 16) {
         length = 65536 - 16;
       }
@@ -358,7 +358,7 @@ void DivPlatformQSound::tick(bool sysTick) {
         }
       }
       chan[i].freq=off*parent->calcFreq(chan[i].baseFreq,chan[i].pitch,false,2,chan[i].pitch2,440.0,4096.0);
-      if (chan[i].freq>0xffff) chan[i].freq=0xffff;
+      if (chan[i].freq>0xefff) chan[i].freq=0xefff;
       if (chan[i].keyOn) {
         rWrite(q1_reg_map[Q1V_BANK][i], qsound_bank);
         rWrite(q1_reg_map[Q1V_END][i], qsound_end);
@@ -496,6 +496,7 @@ int DivPlatformQSound::dispatch(DivCommand c) {
       if (chan[c.chan].active && c.value2) {
         if (parent->song.resetMacroOnPorta) chan[c.chan].macroInit(parent->getIns(chan[c.chan].ins,DIV_INS_AMIGA));
       }
+      if (!chan[c.chan].inPorta && c.value && !parent->song.brokenPortaArp && chan[c.chan].std.arp.will) chan[c.chan].baseFreq=QS_NOTE_FREQUENCY(chan[c.chan].note);
       chan[c.chan].inPorta=c.value;
       break;
     case DIV_CMD_GET_VOLMAX:

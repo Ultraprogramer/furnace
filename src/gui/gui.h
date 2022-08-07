@@ -266,6 +266,7 @@ enum FurnaceGUIFileDialogs {
   GUI_FILE_EXPORT_AUDIO_PER_SYS,
   GUI_FILE_EXPORT_AUDIO_PER_CHANNEL,
   GUI_FILE_EXPORT_VGM,
+  GUI_FILE_EXPORT_CMDSTREAM,
   GUI_FILE_EXPORT_ROM,
   GUI_FILE_LOAD_MAIN_FONT,
   GUI_FILE_LOAD_PAT_FONT,
@@ -277,7 +278,11 @@ enum FurnaceGUIFileDialogs {
   GUI_FILE_EXPORT_LAYOUT,
   GUI_FILE_YRW801_ROM_OPEN,
   GUI_FILE_TG100_ROM_OPEN,
-  GUI_FILE_MU5_ROM_OPEN
+  GUI_FILE_MU5_ROM_OPEN,
+
+  GUI_FILE_TEST_OPEN,
+  GUI_FILE_TEST_OPEN_MULTI,
+  GUI_FILE_TEST_SAVE
 };
 
 enum FurnaceGUIWarnings {
@@ -881,6 +886,7 @@ enum FurnaceGUIFindQueryReplaceModes {
   GUI_QUERY_REPLACE_SET=0,
   GUI_QUERY_REPLACE_ADD,
   GUI_QUERY_REPLACE_ADD_OVERFLOW,
+  GUI_QUERY_REPLACE_SCALE,
   GUI_QUERY_REPLACE_CLEAR,
 
   GUI_QUERY_REPLACE_MAX
@@ -943,17 +949,21 @@ class FurnaceGUI {
   bool updateSampleTex;
 
   String workingDir, fileName, clipboard, warnString, errorString, lastError, curFileName, nextFile;
-  String workingDirSong, workingDirIns, workingDirWave, workingDirSample, workingDirAudioExport, workingDirVGMExport, workingDirFont, workingDirColors, workingDirKeybinds, workingDirLayout, workingDirROM;
+  String workingDirSong, workingDirIns, workingDirWave, workingDirSample, workingDirAudioExport;
+  String workingDirVGMExport, workingDirROMExport, workingDirFont, workingDirColors, workingDirKeybinds;
+  String workingDirLayout, workingDirROM, workingDirTest;
   String mmlString[32];
   String mmlStringW;
 
-  bool quit, warnQuit, willCommit, edit, modified, displayError, displayExporting, vgmExportLoop, wantCaptureKeyboard, oldWantCaptureKeyboard, displayMacroMenu;
+  bool quit, warnQuit, willCommit, edit, modified, displayError, displayExporting, vgmExportLoop, vgmExportPatternHints;
+  bool wantCaptureKeyboard, oldWantCaptureKeyboard, displayMacroMenu;
   bool displayNew, fullScreen, preserveChanPos, wantScrollList, noteInputPoly;
   bool displayPendingIns, pendingInsSingle;
   bool willExport[32];
   int vgmExportVersion;
   int drawHalt;
   int macroPointSize;
+  int waveEditStyle;
 
   ImGuiWindowFlags globalWinFlags;
 
@@ -1087,12 +1097,16 @@ class FurnaceGUI {
     int blankIns;
     int dragMovesSelection;
     int unsignedDetune;
+    int noThreadedInput;
+    int clampSamples;
     unsigned int maxUndoSteps;
     String mainFontPath;
     String patFontPath;
     String audioDevice;
     String midiInDevice;
     String midiOutDevice;
+    String c163Name;
+    String initialSysName;
     std::vector<int> initialSys;
 
     Settings():
@@ -1189,12 +1203,16 @@ class FurnaceGUI {
       blankIns(0),
       dragMovesSelection(1),
       unsignedDetune(0),
+      noThreadedInput(0),
+      clampSamples(0),
       maxUndoSteps(100),
       mainFontPath(""),
       patFontPath(""),
       audioDevice(""),
       midiInDevice(""),
-      midiOutDevice("") {}
+      midiOutDevice(""),
+      c163Name(""),
+      initialSysName("Sega Genesis/Mega Drive") {}
   } settings;
 
   char finalLayoutPath[4096];
@@ -1215,12 +1233,13 @@ class FurnaceGUI {
 
   SelectionPoint selStart, selEnd, cursor, cursorDrag, dragStart, dragEnd;
   bool selecting, selectingFull, dragging, curNibble, orderNibble, followOrders, followPattern, changeAllOrders, mobileUI;
-  bool collapseWindow, demandScrollX, fancyPattern, wantPatName, firstFrame, tempoView, waveHex, lockLayout, editOptsVisible, latchNibble, nonLatchNibble;
+  bool collapseWindow, demandScrollX, fancyPattern, wantPatName, firstFrame, tempoView, waveHex, waveGenVisible, lockLayout, editOptsVisible, latchNibble, nonLatchNibble;
   FurnaceGUIWindows curWindow, nextWindow, curWindowLast;
   float peak[2];
   float patChanX[DIV_MAX_CHANS+1];
   float patChanSlideY[DIV_MAX_CHANS+1];
   const int* nextDesc;
+  String nextDescName;
 
   OperationMask opMaskDelete, opMaskPullDelete, opMaskInsert, opMaskPaste, opMaskTransposeNote, opMaskTransposeValue;
   OperationMask opMaskInterpolate, opMaskFade, opMaskInvertVal, opMaskScale;
@@ -1451,6 +1470,21 @@ class FurnaceGUI {
   bool hasACED;
   unsigned char acedData[23];
 
+  // wave generator
+  int waveGenBaseShape;
+  float waveGenDuty;
+  int waveGenPower;
+  float waveGenInvertPoint;
+  float waveGenAmp[16];
+  float waveGenPhase[16];
+  float waveGenTL[4];
+  int waveGenMult[4];
+  float waveGenFB[4];
+  bool waveGenFMCon1[4];
+  bool waveGenFMCon2[3];
+  bool waveGenFMCon3[2];
+  bool waveGenFM;
+
   void drawSSGEnv(unsigned char type, const ImVec2& size);
   void drawWaveform(unsigned char type, bool opz, const ImVec2& size);
   void drawAlgorithm(unsigned char alg, FurnaceGUIFMAlgs algType, const ImVec2& size);
@@ -1573,6 +1607,8 @@ class FurnaceGUI {
   void editOptions(bool topMenu);
   void noteInput(int num, int key, int vol=-1);
   void valueInput(int num, bool direct=false, int target=-1);
+
+  void doGenerateWave();
 
   void doUndoSample();
   void doRedoSample();

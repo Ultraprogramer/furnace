@@ -17,6 +17,7 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
+#include "dispatch.h"
 #define _USE_MATH_DEFINES
 #include "engine.h"
 #include "instrument.h"
@@ -27,15 +28,11 @@
 #include "../audio/sdlAudio.h"
 #endif
 #include <stdexcept>
-#ifndef _WIN32
-#include <unistd.h>
-#include <pwd.h>
-#include <sys/stat.h>
-#endif
 #ifdef HAVE_JACK
 #include "../audio/jack.h"
 #endif
 #include <math.h>
+#include <float.h>
 #ifdef HAVE_SNDFILE
 #include "sfWrapper.h"
 #endif
@@ -181,6 +178,308 @@ void DivEngine::walkSong(int& loopOrder, int& loopRow, int& loopEnd) {
   }
 }
 
+#define EXPORT_BUFSIZE 2048
+
+double DivEngine::benchmarkPlayback() {
+  float* outBuf[2];
+  outBuf[0]=new float[EXPORT_BUFSIZE];
+  outBuf[1]=new float[EXPORT_BUFSIZE];
+
+  curOrder=0;
+  prevOrder=0;
+  remainingLoops=1;
+  playSub(false);
+
+  std::chrono::high_resolution_clock::time_point timeStart=std::chrono::high_resolution_clock::now();
+
+  // benchmark
+  while (playing) {
+    nextBuf(NULL,outBuf,0,2,EXPORT_BUFSIZE);
+  }
+
+  std::chrono::high_resolution_clock::time_point timeEnd=std::chrono::high_resolution_clock::now();
+
+  delete[] outBuf[0];
+  delete[] outBuf[1];
+
+  double t=(double)(std::chrono::duration_cast<std::chrono::microseconds>(timeEnd-timeStart).count())/1000000.0;
+  printf("[RESULT] %fs\n",t);
+  return t;
+}
+
+double DivEngine::benchmarkSeek() {
+  double t[20];
+  curOrder=curSubSong->ordersLen-1;
+  prevOrder=curSubSong->ordersLen-1;
+
+  // benchmark
+  for (int i=0; i<20; i++) {
+    std::chrono::high_resolution_clock::time_point timeStart=std::chrono::high_resolution_clock::now();
+    playSub(false);     
+    std::chrono::high_resolution_clock::time_point timeEnd=std::chrono::high_resolution_clock::now();
+    t[i]=(double)(std::chrono::duration_cast<std::chrono::microseconds>(timeEnd-timeStart).count())/1000000.0;
+    printf("[#%d] %fs\n",i+1,t[i]);
+  }
+
+  double tMin=DBL_MAX;
+  double tMax=0.0;
+  double tAvg=0.0;
+  for (int i=0; i<20; i++) {
+    if (t[i]<tMin) tMin=t[i];
+    if (t[i]>tMax) tMax=t[i];
+    tAvg+=t[i];
+  }
+  tAvg/=20.0;
+
+  printf("[RESULT] min %fs max %fs average %fs\n",tMin,tMax,tAvg);
+  return tAvg;
+}
+
+#define WRITE_TICK \
+  if (!wroteTick) { \
+    wroteTick=true; \
+    if (binary) { \
+      if (tick-lastTick>255) { \
+        w->writeC(0xfc); \
+        w->writeS(tick-lastTick); \
+      } else if (tick-lastTick>1) { \
+        w->writeC(0xfd); \
+        w->writeC(tick-lastTick); \
+      } else { \
+        w->writeC(0xfe); \
+      } \
+    } else { \
+      w->writeText(fmt::sprintf(">> TICK %d\n",tick)); \
+    } \
+    lastTick=tick; \
+  }
+
+void writePackedCommandValues(SafeWriter* w, const DivCommand& c) {
+  w->writeC(c.cmd);
+  switch (c.cmd) {
+    case DIV_CMD_NOTE_ON:
+    case DIV_CMD_HINT_LEGATO:
+      if (c.value==DIV_NOTE_NULL) {
+        w->writeC(0xff);
+      } else {
+        w->writeC(c.value+60);
+      }
+      break;
+    case DIV_CMD_NOTE_OFF:
+    case DIV_CMD_NOTE_OFF_ENV:
+    case DIV_CMD_ENV_RELEASE:
+      break;
+    case DIV_CMD_INSTRUMENT:
+    case DIV_CMD_HINT_VIBRATO_RANGE:
+    case DIV_CMD_HINT_VIBRATO_SHAPE:
+    case DIV_CMD_HINT_PITCH:
+    case DIV_CMD_HINT_VOLUME:
+    case DIV_CMD_SAMPLE_MODE:
+    case DIV_CMD_SAMPLE_FREQ:
+    case DIV_CMD_SAMPLE_BANK:
+    case DIV_CMD_SAMPLE_POS:
+    case DIV_CMD_SAMPLE_DIR:
+    case DIV_CMD_FM_HARD_RESET:
+    case DIV_CMD_FM_LFO:
+    case DIV_CMD_FM_LFO_WAVE:
+    case DIV_CMD_FM_FB:
+    case DIV_CMD_FM_EXTCH:
+    case DIV_CMD_FM_AM_DEPTH:
+    case DIV_CMD_FM_PM_DEPTH:
+    case DIV_CMD_STD_NOISE_FREQ:
+    case DIV_CMD_STD_NOISE_MODE:
+    case DIV_CMD_WAVE:
+    case DIV_CMD_GB_SWEEP_TIME:
+    case DIV_CMD_GB_SWEEP_DIR:
+    case DIV_CMD_PCE_LFO_MODE:
+    case DIV_CMD_PCE_LFO_SPEED:
+    case DIV_CMD_NES_DMC:
+    case DIV_CMD_C64_CUTOFF:
+    case DIV_CMD_C64_RESONANCE:
+    case DIV_CMD_C64_FILTER_MODE:
+    case DIV_CMD_C64_RESET_TIME:
+    case DIV_CMD_C64_RESET_MASK:
+    case DIV_CMD_C64_FILTER_RESET:
+    case DIV_CMD_C64_DUTY_RESET:
+    case DIV_CMD_C64_EXTENDED:
+    case DIV_CMD_AY_ENVELOPE_SET:
+    case DIV_CMD_AY_ENVELOPE_LOW:
+    case DIV_CMD_AY_ENVELOPE_HIGH:
+    case DIV_CMD_AY_ENVELOPE_SLIDE:
+    case DIV_CMD_AY_NOISE_MASK_AND:
+    case DIV_CMD_AY_NOISE_MASK_OR:
+    case DIV_CMD_AY_AUTO_ENVELOPE:
+      w->writeC(c.value);
+      break;
+    case DIV_CMD_PANNING:
+    case DIV_CMD_HINT_VIBRATO:
+    case DIV_CMD_HINT_ARPEGGIO:
+    case DIV_CMD_HINT_PORTA:
+    case DIV_CMD_FM_TL:
+    case DIV_CMD_FM_AM:
+    case DIV_CMD_FM_AR:
+    case DIV_CMD_FM_DR:
+    case DIV_CMD_FM_SL:
+    case DIV_CMD_FM_D2R:
+    case DIV_CMD_FM_RR:
+    case DIV_CMD_FM_DT:
+    case DIV_CMD_FM_DT2:
+    case DIV_CMD_FM_RS:
+    case DIV_CMD_FM_KSR:
+    case DIV_CMD_FM_VIB:
+    case DIV_CMD_FM_SUS:
+    case DIV_CMD_FM_WS:
+    case DIV_CMD_FM_SSG:
+    case DIV_CMD_FM_REV:
+    case DIV_CMD_FM_EG_SHIFT:
+    case DIV_CMD_FM_MULT:
+    case DIV_CMD_FM_FINE:
+    case DIV_CMD_AY_IO_WRITE:
+    case DIV_CMD_AY_AUTO_PWM:
+      w->writeC(c.value);
+      w->writeC(c.value2);
+      break;
+    case DIV_CMD_PRE_PORTA:
+      w->writeC((c.value?0x80:0)|(c.value2?0x40:0));
+      break;
+    case DIV_CMD_HINT_VOL_SLIDE:
+    case DIV_CMD_C64_FINE_DUTY:
+    case DIV_CMD_C64_FINE_CUTOFF:
+      w->writeS(c.value);
+      break;
+    case DIV_CMD_FM_FIXFREQ:
+      w->writeS((c.value<<12)|(c.value2&0x7ff));
+      break;
+    case DIV_CMD_NES_SWEEP:
+      w->writeC((c.value?8:0)|(c.value2&0x77));
+      break;
+    default:
+      logW("unimplemented command %s!",cmdName[c.cmd]);
+      break;
+  }
+}
+
+SafeWriter* DivEngine::saveCommand(bool binary) {
+  stop();
+  repeatPattern=false;
+  setOrder(0);
+  BUSY_BEGIN_SOFT;
+  // determine loop point
+  int loopOrder=0;
+  int loopRow=0;
+  int loopEnd=0;
+  walkSong(loopOrder,loopRow,loopEnd);
+  logI("loop point: %d %d",loopOrder,loopRow);
+
+  SafeWriter* w=new SafeWriter;
+  w->init();
+
+  // write header
+  if (binary) {
+    w->write("FCS",4);
+  } else {
+    w->writeText("# Furnace Command Stream\n\n");
+
+    w->writeText("[Information]\n");
+    w->writeText(fmt::sprintf("name: %s\n",song.name));
+    w->writeText(fmt::sprintf("author: %s\n",song.author));
+    w->writeText(fmt::sprintf("category: %s\n",song.category));
+    w->writeText(fmt::sprintf("system: %s\n",song.systemName));
+
+    w->writeText("\n");
+
+    w->writeText("[SubSongInformation]\n");
+    w->writeText(fmt::sprintf("name: %s\n",curSubSong->name));
+    w->writeText(fmt::sprintf("tickRate: %f\n",curSubSong->hz));
+
+    w->writeText("\n");
+
+    w->writeText("[SysDefinition]\n");
+    // TODO
+
+    w->writeText("\n");
+  }
+
+  // play the song ourselves
+  bool done=false;
+  playSub(false);
+  
+  if (!binary) {
+    w->writeText("[Stream]\n");
+  }
+  int tick=0;
+  bool oldCmdStreamEnabled=cmdStreamEnabled;
+  cmdStreamEnabled=true;
+  double curDivider=divider;
+  int lastTick=0;
+  while (!done) {
+    if (nextTick(false,true) || !playing) {
+      done=true;
+    }
+    // get command stream
+    bool wroteTick=false;
+    if (curDivider!=divider) {
+      curDivider=divider;
+      WRITE_TICK;
+      if (binary) {
+        w->writeC(0xfb);
+        w->writeI((int)(curDivider*65536));
+      } else {
+        w->writeText(fmt::sprintf(">> SET_RATE %f\n",curDivider));
+      }
+    }
+    for (DivCommand& i: cmdStream) {
+      switch (i.cmd) {
+        // strip away hinted/useless commands
+        case DIV_ALWAYS_SET_VOLUME:
+          break;
+        case DIV_CMD_GET_VOLUME:
+          break;
+        case DIV_CMD_VOLUME:
+          break;
+        case DIV_CMD_NOTE_PORTA:
+          break;
+        case DIV_CMD_LEGATO:
+          break;
+        case DIV_CMD_PITCH:
+          break;
+        case DIV_CMD_PRE_NOTE:
+          break;
+        default:
+          WRITE_TICK;
+          if (binary) {
+            w->writeC(i.chan);
+            writePackedCommandValues(w,i);
+          } else {
+            w->writeText(fmt::sprintf("  %d: %s %d %d\n",i.chan,cmdName[i.cmd],i.value,i.value2));
+          }
+          break;
+      }
+    }
+    cmdStream.clear();
+    tick++;
+  }
+  cmdStreamEnabled=oldCmdStreamEnabled;
+
+  if (binary) {
+    w->writeC(0xff);
+  } else {
+    if (!playing) {
+      w->writeText(">> END\n");
+    } else {
+      w->writeText(">> LOOP 0\n");
+    }
+  }
+
+  remainingLoops=-1;
+  playing=false;
+  freelance=false;
+  extValuePresent=false;
+  BUSY_END;
+
+  return w;
+}
+
 void _runExportThread(DivEngine* caller) {
   caller->runExportThread();
 }
@@ -188,8 +487,6 @@ void _runExportThread(DivEngine* caller) {
 bool DivEngine::isExporting() {
   return exporting;
 }
-
-#define EXPORT_BUFSIZE 2048
 
 #ifdef HAVE_SNDFILE
 void DivEngine::runExportThread() {
@@ -786,7 +1083,7 @@ void DivEngine::initSongWithDesc(const int* description) {
   }
 }
 
-void DivEngine::createNew(const int* description) {
+void DivEngine::createNew(const int* description, String sysName) {
   quitDispatch();
   BUSY_BEGIN;
   saveLock.lock();
@@ -795,6 +1092,11 @@ void DivEngine::createNew(const int* description) {
   changeSong(0);
   if (description!=NULL) {
     initSongWithDesc(description);
+  }
+  if (sysName=="") {
+    song.systemName=getSongSystemLegacyName(song,!getConfInt("noMultiSystem",0));
+  } else {
+    song.systemName=sysName;
   }
   recalcChans();
   saveLock.unlock();
@@ -2170,7 +2472,7 @@ int DivEngine::addSampleFromFile(const char* path) {
 
       sample->rate=33144;
       sample->centerRate=33144;
-      sample->depth=1;
+      sample->depth=DIV_SAMPLE_DEPTH_1BIT_DPCM;
       sample->init(len*8);
 
       if (fread(sample->dataDPCM,1,len,f)==0) {
@@ -2245,9 +2547,9 @@ int DivEngine::addSampleFromFile(const char* path) {
 
   int index=0;
   if ((si.format&SF_FORMAT_SUBMASK)==SF_FORMAT_PCM_U8) {
-    sample->depth=8;
+    sample->depth=DIV_SAMPLE_DEPTH_8BIT;
   } else {
-    sample->depth=16;
+    sample->depth=DIV_SAMPLE_DEPTH_16BIT;
   }
   sample->init(si.frames);
   if ((si.format&SF_FORMAT_SUBMASK)==SF_FORMAT_PCM_U8) {
@@ -2302,6 +2604,7 @@ int DivEngine::addSampleFromFile(const char* path) {
     if(inst.loop_count && inst.loops[0].mode == SF_LOOP_FORWARD)
     {
       sample->loopStart=inst.loops[0].start;
+      sample->loopEnd=inst.loops[0].end;
       if(inst.loops[0].end < (unsigned int)sampleCount)
         sampleCount=inst.loops[0].end;
     }
@@ -2927,36 +3230,6 @@ void DivEngine::quitDispatch() {
   BUSY_END;
 }
 
-#define CHECK_CONFIG_DIR_MAC() \
-  configPath+="/Library/Application Support/Furnace"; \
-  if (stat(configPath.c_str(),&st)<0) { \
-    logI("creating config dir..."); \
-    if (mkdir(configPath.c_str(),0755)<0) { \
-      logW("could not make config dir! (%s)",strerror(errno)); \
-      configPath="."; \
-    } \
-  }
-
-#define CHECK_CONFIG_DIR() \
-  configPath+="/.config"; \
-  if (stat(configPath.c_str(),&st)<0) { \
-    logI("creating user config dir..."); \
-    if (mkdir(configPath.c_str(),0755)<0) { \
-      logW("could not make user config dir! (%s)",strerror(errno)); \
-      configPath="."; \
-    } \
-  } \
-  if (configPath!=".") { \
-    configPath+="/furnace"; \
-    if (stat(configPath.c_str(),&st)<0) { \
-      logI("creating config dir..."); \
-      if (mkdir(configPath.c_str(),0755)<0) { \
-        logW("could not make config dir! (%s)",strerror(errno)); \
-        configPath="."; \
-      } \
-    } \
-  }
-
 bool DivEngine::initAudioBackend() {
   // load values
   if (audioEngine==DIV_AUDIO_NULL) {
@@ -2969,6 +3242,7 @@ bool DivEngine::initAudioBackend() {
 
   lowQuality=getConfInt("audioQuality",0);
   forceMono=getConfInt("forceMono",0);
+  clampSamples=getConfInt("clampSamples",0);
   lowLatency=getConfInt("lowLatency",0);
   metroVol=(float)(getConfInt("metroVol",100))/100.0f;
   if (metroVol<0.0f) metroVol=0.0f;
@@ -3081,50 +3355,17 @@ bool DivEngine::deinitAudioBackend() {
     output->quit();
     delete output;
     output=NULL;
-    audioEngine=DIV_AUDIO_NULL;
+    //audioEngine=DIV_AUDIO_NULL;
   }
   return true;
 }
 
-#ifdef _WIN32
-#include "winStuff.h"
-#endif
-
 bool DivEngine::init() {
   // register systems
   if (!systemsRegistered) registerSystems();
-  
+
   // init config
-#ifdef _WIN32
-  configPath=getWinConfigPath();
-#elif defined(IS_MOBILE)
-  configPath=SDL_GetPrefPath("tildearrow","furnace");
-#else
-  struct stat st;
-  char* home=getenv("HOME");
-  if (home==NULL) {
-    int uid=getuid();
-    struct passwd* entry=getpwuid(uid);
-    if (entry==NULL) {
-      logW("unable to determine config directory! (%s)",strerror(errno));
-      configPath=".";
-    } else {
-      configPath=entry->pw_dir;
-#ifdef __APPLE__
-      CHECK_CONFIG_DIR_MAC();
-#else
-      CHECK_CONFIG_DIR();
-#endif
-    }
-  } else {
-    configPath=home;
-#ifdef __APPLE__
-    CHECK_CONFIG_DIR_MAC();
-#else
-    CHECK_CONFIG_DIR();
-#endif
-  }
-#endif
+  initConfDir();
   logD("config path: %s",configPath.c_str());
 
   loadConf();
@@ -3139,6 +3380,12 @@ bool DivEngine::init() {
     if (preset.size()>0 && (preset.size()&3)==0) {
       preset.push_back(0);
       initSongWithDesc(preset.data());
+    }
+    String sysName=getConfString("initialSysName","");
+    if (sysName=="") {
+      song.systemName=getSongSystemLegacyName(song,!getConfInt("noMultiSystem",0));
+    } else {
+      song.systemName=sysName;
     }
     hasLoadedSomething=true;
   }

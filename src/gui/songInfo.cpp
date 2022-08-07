@@ -64,6 +64,25 @@ void FurnaceGUI::drawSongInfo() {
       if (ImGui::InputText("##Author",&e->song.author)) {
         MARK_MODIFIED;
       }
+
+      ImGui::TableNextRow();
+      ImGui::TableNextColumn();
+      ImGui::Text("Album");
+      ImGui::TableNextColumn();
+      ImGui::SetNextItemWidth(avail);
+      if (ImGui::InputText("##Category",&e->song.category)) {
+        MARK_MODIFIED;
+      }
+      ImGui::TableNextRow();
+      ImGui::TableNextColumn();
+      ImGui::Text("System");
+      ImGui::TableNextColumn();
+      ImGui::SetNextItemWidth(avail);
+      if (ImGui::InputText("##SystemName",&e->song.systemName)) {
+        MARK_MODIFIED;
+        updateWindowTitle();
+      }
+
       ImGui::EndTable();
     }
 

@@ -109,6 +109,84 @@ void FurnaceGUI::drawSysConf(int chan, DivSystem type, unsigned int& flags, bool
       }
       break;
     }
+    case DIV_SYSTEM_PCE: {
+      sysPal=flags&1;
+      if (ImGui::Checkbox("Pseudo-PAL",&sysPal)) {
+        copyOfFlags=(flags&(~1))|(unsigned int)sysPal;
+      }
+      bool antiClick=flags&8;
+      if (ImGui::Checkbox("Disable anti-click",&antiClick)) {
+        copyOfFlags=(flags&(~8))|(antiClick<<3);
+      }
+      ImGui::Text("Chip revision:");
+      if (ImGui::RadioButton("HuC6280 (original)",(flags&4)==0)) {
+        copyOfFlags=(flags&(~4))|0;
+      }
+      if (ImGui::RadioButton("HuC6280A (SuperGrafx)",(flags&4)==4)) {
+        copyOfFlags=(flags&(~4))|4;
+      }
+      break;
+    }
+    case DIV_SYSTEM_SOUND_UNIT: {
+      ImGui::Text("CPU rate:");
+      if (ImGui::RadioButton("6.18MHz (NTSC)",(flags&3)==0)) {
+        copyOfFlags=(flags&(~3))|0;
+      }
+      if (ImGui::RadioButton("5.95MHz (PAL)",(flags&3)==1)) {
+        copyOfFlags=(flags&(~3))|1;
+      }
+      ImGui::Text("Chip revision (sample memory):");
+      if (ImGui::RadioButton("A/B/E (8K)",(flags&16)==0)) {
+        copyOfFlags=(flags&(~16))|0;
+      }
+      if (ImGui::RadioButton("D/F (64K)",(flags&16)==16)) {
+        copyOfFlags=(flags&(~16))|16;
+      }
+      bool echo=flags&4;
+      if (ImGui::Checkbox("Enable echo",&echo)) {
+        copyOfFlags=(flags&(~4))|(echo<<2);
+      }
+      bool flipEcho=flags&8;
+      if (ImGui::Checkbox("Swap echo channels",&flipEcho)) {
+        copyOfFlags=(flags&(~8))|(flipEcho<<3);
+      }
+      ImGui::Text("Echo delay:");
+      int echoBufSize=(flags&0x3f00)>>8;
+      if (CWSliderInt("##EchoBufSize",&echoBufSize,0,63)) {
+        if (echoBufSize<0) echoBufSize=0;
+        if (echoBufSize>63) echoBufSize=63;
+        copyOfFlags=(flags&~0x3f00)|(echoBufSize<<8);
+      } rightClickable
+      ImGui::Text("Echo resolution:");
+      int echoResolution=(flags&0xf00000)>>20;
+      if (CWSliderInt("##EchoResolution",&echoResolution,0,15)) {
+        if (echoResolution<0) echoResolution=0;
+        if (echoResolution>15) echoResolution=15;
+        copyOfFlags=(flags&(~0xf00000))|(echoResolution<<20);
+      } rightClickable
+      ImGui::Text("Echo feedback:");
+      int echoFeedback=(flags&0xf0000)>>16;
+      if (CWSliderInt("##EchoFeedback",&echoFeedback,0,15)) {
+        if (echoFeedback<0) echoFeedback=0;
+        if (echoFeedback>15) echoFeedback=15;
+        copyOfFlags=(flags&(~0xf0000))|(echoFeedback<<16);
+      } rightClickable
+      ImGui::Text("Echo volume:");
+      int echoVolume=(signed char)((flags&0xff000000)>>24);
+      if (CWSliderInt("##EchoVolume",&echoVolume,-128,127)) {
+        if (echoVolume<-128) echoVolume=-128;
+        if (echoVolume>127) echoVolume=127;
+        copyOfFlags=(flags&(~0xff000000))|(((unsigned char)echoVolume)<<24);
+      } rightClickable
+      break;
+    }
+    case DIV_SYSTEM_GB: {
+      bool antiClick=flags&8;
+      if (ImGui::Checkbox("Disable anti-click",&antiClick)) {
+        copyOfFlags=(flags&(~8))|(antiClick<<3);
+      }
+      break;
+    }
     case DIV_SYSTEM_OPLL:
     case DIV_SYSTEM_OPLL_DRUMS:
     case DIV_SYSTEM_VRC7: {
@@ -569,7 +647,7 @@ void FurnaceGUI::drawSysConf(int chan, DivSystem type, unsigned int& flags, bool
     case DIV_SYSTEM_OPL3:
     case DIV_SYSTEM_OPL3_DRUMS: {
       ImGui::Text("Clock rate:");
-      if (ImGui::RadioButton("14.32MHz (MTSC)",(flags&255)==0)) {
+      if (ImGui::RadioButton("14.32MHz (NTSC)",(flags&255)==0)) {
         copyOfFlags=(flags&(~255))|0;
       }
       if (ImGui::RadioButton("14.19MHz (PAL)",(flags&255)==1)) {
@@ -591,10 +669,10 @@ void FurnaceGUI::drawSysConf(int chan, DivSystem type, unsigned int& flags, bool
       if (ImGui::RadioButton("16.9344MHz",(flags&255)==0)) {
         copyOfFlags=(flags&(~255))|0;
       }
-      if (ImGui::RadioButton("14.32MHz (MTSC)",(flags&255)==1)) {
+      if (ImGui::RadioButton("14.32MHz (NTSC)",(flags&255)==1)) {
         copyOfFlags=(flags&(~255))|1;
       }
-      if (ImGui::RadioButton("14.19MHz (PAL)",(flags&255)==3)) {
+      if (ImGui::RadioButton("14.19MHz (PAL)",(flags&255)==2)) {
         copyOfFlags=(flags&(~255))|2;
       }
       if (ImGui::RadioButton("16MHz",(flags&255)==3)) {
@@ -608,12 +686,35 @@ void FurnaceGUI::drawSysConf(int chan, DivSystem type, unsigned int& flags, bool
       }
       break;
     }
-    case DIV_SYSTEM_GB:
+    case DIV_SYSTEM_PCM_DAC: {
+      // default to 44100Hz 16-bit stereo
+      if (!flags) copyOfFlags=flags=0x1f0000|44099;
+      int sampRate=(flags&65535)+1;
+      int bitDepth=((flags>>16)&15)+1;
+      bool stereo=(flags>>20)&1;
+      ImGui::Text("Output rate:");
+      if (CWSliderInt("##SampRate",&sampRate,1000,65536)) {
+        if (sampRate<1000) sampRate=1000;
+        if (sampRate>65536) sampRate=65536;
+        copyOfFlags=(flags&(~65535))|(sampRate-1);
+      } rightClickable
+      ImGui::Text("Output bit depth:");
+      if (CWSliderInt("##BitDepth",&bitDepth,1,16)) {
+        if (bitDepth<1) bitDepth=1;
+        if (bitDepth>16) bitDepth=16;
+        copyOfFlags=(flags&(~(15<<16)))|((bitDepth-1)<<16);
+      } rightClickable
+      if (ImGui::Checkbox("Stereo",&stereo)) {
+        copyOfFlags=(flags&(~(1<<20)))|(stereo<<20);
+      }
+      break;
+    }
     case DIV_SYSTEM_SWAN:
     case DIV_SYSTEM_VERA:
     case DIV_SYSTEM_BUBSYS_WSG:
     case DIV_SYSTEM_YMU759:
     case DIV_SYSTEM_PET:
+    case DIV_SYSTEM_T6W28:
       ImGui::Text("nothing to configure");
       break;
     default:
