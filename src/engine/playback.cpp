@@ -31,7 +31,9 @@ void DivEngine::nextOrder() {
   curRow=0;
   if (repeatPattern) return;
   if (++curOrder>=curSubSong->ordersLen) {
+    logV("end of orders reached");
     endOfSong=true;
+    memset(walked,0,8192);
     curOrder=0;
   }
 }
@@ -211,7 +213,27 @@ const char* formatNote(unsigned char note, unsigned char octave) {
 
 int DivEngine::dispatchCmd(DivCommand c) {
   if (view==DIV_STATUS_COMMANDS) {
-    if (!skipping) printf("%8d | %d: %s(%d, %d)\n",totalTicksR,c.chan,cmdName[c.cmd],c.value,c.value2);
+    if (!skipping) {
+      switch (c.cmd) {
+        // strip away hinted/useless commands
+        case DIV_ALWAYS_SET_VOLUME:
+          break;
+        case DIV_CMD_GET_VOLUME:
+          break;
+        case DIV_CMD_VOLUME:
+          break;
+        case DIV_CMD_NOTE_PORTA:
+          break;
+        case DIV_CMD_LEGATO:
+          break;
+        case DIV_CMD_PITCH:
+          break;
+        case DIV_CMD_PRE_NOTE:
+          break;
+        default:
+          printf("%8d | %d: %s(%d, %d)\n",totalTicksR,c.chan,cmdName[c.cmd],c.value,c.value2);
+      }
+    }
   }
   totalCmds++;
   if (cmdStreamEnabled && cmdStream.size()<2000) {
@@ -272,13 +294,39 @@ int DivEngine::dispatchCmd(DivCommand c) {
 }
 
 bool DivEngine::perSystemEffect(int ch, unsigned char effect, unsigned char effectVal) {
-  if (sysDefs[sysOfChan[ch]]==NULL) return false;
-  return sysDefs[sysOfChan[ch]]->effectFunc(ch,effect,effectVal);
+  DivSysDef* sysDef=sysDefs[sysOfChan[ch]];
+  if (sysDef==NULL) return false;
+  auto iter=sysDef->effectHandlers.find(effect);
+  if (iter==sysDef->effectHandlers.end()) return false;
+  EffectHandler handler=iter->second;
+  int val=0;
+  int val2=0;
+  try {
+    val=handler.val?handler.val(effect,effectVal):effectVal;
+    val2=handler.val2?handler.val2(effect,effectVal):0;
+  } catch (DivDoNotHandleEffect& e) {
+    return false;
+  }
+  // wouldn't this cause problems if it were to return 0?
+  return dispatchCmd(DivCommand(handler.dispatchCmd,ch,val,val2));
 }
 
 bool DivEngine::perSystemPostEffect(int ch, unsigned char effect, unsigned char effectVal) {
-  if (sysDefs[sysOfChan[ch]]==NULL) return false;
-  return sysDefs[sysOfChan[ch]]->postEffectFunc(ch,effect,effectVal);
+  DivSysDef* sysDef=sysDefs[sysOfChan[ch]];
+  if (sysDef==NULL) return false;
+  auto iter=sysDef->postEffectHandlers.find(effect);
+  if (iter==sysDef->postEffectHandlers.end()) return false;
+  EffectHandler handler=iter->second;
+  int val=0;
+  int val2=0;
+  try {
+    val=handler.val?handler.val(effect,effectVal):effectVal;
+    val2=handler.val2?handler.val2(effect,effectVal):0;
+  } catch (DivDoNotHandleEffect& e) {
+    return true;
+  }
+  // wouldn't this cause problems if it were to return 0?
+  return dispatchCmd(DivCommand(handler.dispatchCmd,ch,val,val2));
 }
 
 void DivEngine::processRow(int i, bool afterDelay) {
@@ -302,20 +350,38 @@ void DivEngine::processRow(int i, bool afterDelay) {
           if (effectVal>0) speed2=effectVal;
           break;
         case 0x0b: // change order
-          if (changeOrd==-1) {
+          if (changeOrd==-1 || song.jumpTreatment==0) {
             changeOrd=effectVal;
-            changePos=0;
+            if (song.jumpTreatment==1 || song.jumpTreatment==2) {
+              changePos=0;
+            }
           }
           break;
         case 0x0d: // next order
-          if (changeOrd<0 && (curOrder<(curSubSong->ordersLen-1) || !song.ignoreJumpAtEnd)) {
-            changeOrd=-2;
-            changePos=effectVal;
+          if (song.jumpTreatment==2) {
+            if ((curOrder<(curSubSong->ordersLen-1) || !song.ignoreJumpAtEnd)) {
+              changeOrd=-2;
+              changePos=effectVal;
+            }
+          } else if (song.jumpTreatment==1) {
+            if (changeOrd<0 && (curOrder<(curSubSong->ordersLen-1) || !song.ignoreJumpAtEnd)) {
+              changeOrd=-2;
+              changePos=effectVal;
+            }
+          } else {
+            if (curOrder<(curSubSong->ordersLen-1) || !song.ignoreJumpAtEnd) {
+              if (changeOrd<0) {
+                changeOrd=-2;
+              }
+              changePos=effectVal;
+            }
           }
           break;
         case 0xed: // delay
           if (effectVal!=0) {
-            if (effectVal<=nextSpeed) {
+            bool comparison=(song.delayBehavior==1)?(effectVal<=nextSpeed):(effectVal<nextSpeed);
+            if (song.delayBehavior==2) comparison=true;
+            if (comparison) {
               chan[i].rowDelay=effectVal+1;
               chan[i].delayOrder=whatOrder;
               chan[i].delayRow=whatRow;
@@ -326,6 +392,7 @@ void DivEngine::processRow(int i, bool afterDelay) {
               }
               returnAfterPre=true;
             } else {
+              logV("higher than nextSpeed! %d>%d",effectVal,nextSpeed);
               chan[i].delayLocked=false;
             }
           }
@@ -333,6 +400,8 @@ void DivEngine::processRow(int i, bool afterDelay) {
       }
     }
     if (returnAfterPre) return;
+  } else {
+    logV("honoring delay at position %d",whatRow);
   }
 
   if (chan[i].delayLocked) return;
@@ -584,13 +653,10 @@ void DivEngine::processRow(int i, bool afterDelay) {
         break;
       case 0xc0: case 0xc1: case 0xc2: case 0xc3: // set Hz
         divider=(double)(((effect&0x3)<<8)|effectVal);
-        if (divider<10) divider=10;
+        if (divider<1) divider=1;
         cycles=got.rate*pow(2,MASTER_CLOCK_PREC)/divider;
         clockDrift=0;
         subticks=0;
-        break;
-      case 0xdf: // set sample direction
-        dispatchCmd(DivCommand(DIV_CMD_SAMPLE_DIR,i,effectVal));
         break;
       case 0xe0: // arp speed
         if (effectVal>0) {
@@ -661,7 +727,7 @@ void DivEngine::processRow(int i, bool afterDelay) {
         dispatchCmd(DivCommand(DIV_CMD_SAMPLE_BANK,i,effectVal));
         break;
       case 0xec: // delayed note cut
-        if (effectVal>0 && effectVal<nextSpeed) {
+        if (effectVal>0 && (song.delayBehavior==2 || effectVal<nextSpeed)) {
           chan[i].cut=effectVal+1;
         }
         break;
@@ -675,7 +741,7 @@ void DivEngine::processRow(int i, bool afterDelay) {
         break;
       case 0xf0: // set Hz by tempo
         divider=(double)effectVal*2.0/5.0;
-        if (divider<10) divider=10;
+        if (divider<1) divider=1;
         cycles=got.rate*pow(2,MASTER_CLOCK_PREC)/divider;
         clockDrift=0;
         subticks=0;
@@ -857,9 +923,13 @@ void DivEngine::nextRow() {
   prevRow=curRow;
 
   for (int i=0; i<chans; i++) {
-    chan[i].rowDelay=0;
+    if (song.delayBehavior!=2) {
+      chan[i].rowDelay=0;
+    }
     processRow(i,false);
   }
+
+  walked[((curOrder<<5)+(curRow>>3))&8191]|=1<<(curRow&7);
 
   if (changeOrd!=-1) {
     if (repeatPattern) {
@@ -867,12 +937,15 @@ void DivEngine::nextRow() {
       changeOrd=-1;
     } else {
       curRow=changePos;
+      changePos=0;
       if (changeOrd==-2) changeOrd=curOrder+1;
-      if (changeOrd<=curOrder) endOfSong=true;
+      // old loop detection routine
+      //if (changeOrd<=curOrder) endOfSong=true;
       curOrder=changeOrd;
       if (curOrder>=curSubSong->ordersLen) {
         curOrder=0;
         endOfSong=true;
+        memset(walked,0,8192);
       }
       changeOrd=-1;
     }
@@ -880,6 +953,13 @@ void DivEngine::nextRow() {
   } else if (playing) if (++curRow>=curSubSong->patLen) {
     nextOrder();
     if (haltOn==DIV_HALT_PATTERN) halted=true;
+  }
+
+  // new loop detection routine
+  if (!endOfSong && walked[((curOrder<<5)+(curRow>>3))&8191]&(1<<(curRow&7))) {
+    logV("loop reached");
+    endOfSong=true;
+    memset(walked,0,8192);
   }
 
   if (song.brokenSpeedSel) {
@@ -939,7 +1019,7 @@ void DivEngine::nextRow() {
 
 bool DivEngine::nextTick(bool noAccum, bool inhibitLowLat) {
   bool ret=false;
-  if (divider<10) divider=10;
+  if (divider<1) divider=1;
 
   if (lowLatency && !skipping && !inhibitLowLat) {
     tickMult=1000/divider;
@@ -960,10 +1040,27 @@ bool DivEngine::nextTick(bool noAccum, bool inhibitLowLat) {
     //output->midiOut->send(TAMidiMessage(TA_MIDI_CLOCK,0,0));
   }
 
+  if (!pendingNotes.empty()) {
+    bool isOn[DIV_MAX_CHANS];
+    memset(isOn,0,DIV_MAX_CHANS*sizeof(bool));
+    
+    for (int i=pendingNotes.size()-1; i>=0; i--) {
+      if (pendingNotes[i].channel<0 || pendingNotes[i].channel>=chans) continue;
+      if (pendingNotes[i].on) {
+        isOn[pendingNotes[i].channel]=true;
+      } else {
+        if (isOn[pendingNotes[i].channel]) {
+          logV("erasing off -> on sequence in %d",pendingNotes[i].channel);
+          pendingNotes.erase(pendingNotes.begin()+i);
+        }
+      }
+    }
+  }
+
   while (!pendingNotes.empty()) {
     DivNoteEvent& note=pendingNotes.front();
     if (note.channel<0 || note.channel>=chans) {
-      pendingNotes.pop();
+      pendingNotes.pop_front();
       continue;
     }
     if (note.on) {
@@ -983,7 +1080,7 @@ bool DivEngine::nextTick(bool noAccum, bool inhibitLowLat) {
         dispatchCmd(DivCommand(DIV_CMD_NOTE_OFF,note.channel));
       }
     }
-    pendingNotes.pop();
+    pendingNotes.pop_front();
   }
 
   if (!freelance) {
@@ -1195,7 +1292,7 @@ void DivEngine::nextBuf(float** in, float** out, int inChans, int outChans, unsi
         case TA_MIDI_NOTE_OFF: {
           if (chan<0 || chan>=chans) break;
           if (midiIsDirect) {
-            pendingNotes.push(DivNoteEvent(chan,-1,-1,-1,false));
+            pendingNotes.push_back(DivNoteEvent(chan,-1,-1,-1,false));
           } else {
             autoNoteOff(msg.type&15,msg.data[0]-12,msg.data[1]);
           }
@@ -1210,13 +1307,13 @@ void DivEngine::nextBuf(float** in, float** out, int inChans, int outChans, unsi
           if (chan<0 || chan>=chans) break;
           if (msg.data[1]==0) {
             if (midiIsDirect) {
-              pendingNotes.push(DivNoteEvent(chan,-1,-1,-1,false));
+              pendingNotes.push_back(DivNoteEvent(chan,-1,-1,-1,false));
             } else {
               autoNoteOff(msg.type&15,msg.data[0]-12,msg.data[1]);
             }
           } else {
             if (midiIsDirect) {
-              pendingNotes.push(DivNoteEvent(chan,ins,msg.data[0]-12,msg.data[1],true));
+              pendingNotes.push_back(DivNoteEvent(chan,ins,msg.data[0]-12,msg.data[1],true));
             } else {
               autoNoteOn(msg.type&15,ins,msg.data[0]-12,msg.data[1]);
             }
@@ -1308,25 +1405,22 @@ void DivEngine::nextBuf(float** in, float** out, int inChans, int outChans, unsi
   }
 
   // logic starts here
-  size_t runtotal[32];
-  size_t runLeft[32];
-  size_t runPos[32];
-  size_t lastAvail[32];
   for (int i=0; i<song.systemLen; i++) {
-    lastAvail[i]=blip_samples_avail(disCont[i].bb[0]);
-    if (lastAvail[i]>0) {
-      disCont[i].flush(lastAvail[i]);
+    disCont[i].lastAvail=blip_samples_avail(disCont[i].bb[0]);
+    if (disCont[i].lastAvail>0) {
+      disCont[i].flush(disCont[i].lastAvail);
     }
-    runtotal[i]=blip_clocks_needed(disCont[i].bb[0],size-lastAvail[i]);
-    if (runtotal[i]>disCont[i].bbInLen) {
+    disCont[i].runtotal=blip_clocks_needed(disCont[i].bb[0],size-disCont[i].lastAvail);
+    if (disCont[i].runtotal>disCont[i].bbInLen) {
+      logV("growing dispatch %d bbIn to %d",i,disCont[i].runtotal+256);
       delete[] disCont[i].bbIn[0];
       delete[] disCont[i].bbIn[1];
-      disCont[i].bbIn[0]=new short[runtotal[i]+256];
-      disCont[i].bbIn[1]=new short[runtotal[i]+256];
-      disCont[i].bbInLen=runtotal[i]+256;
+      disCont[i].bbIn[0]=new short[disCont[i].runtotal+256];
+      disCont[i].bbIn[1]=new short[disCont[i].runtotal+256];
+      disCont[i].bbInLen=disCont[i].runtotal+256;
     }
-    runLeft[i]=runtotal[i];
-    runPos[i]=0;
+    disCont[i].runLeft=disCont[i].runtotal;
+    disCont[i].runPos=0;
   }
 
   if (metroTickLen<size) {
@@ -1378,10 +1472,10 @@ void DivEngine::nextBuf(float** in, float** out, int inChans, int outChans, unsi
       // 3. tick the clock and fill buffers as needed
       if (cycles<runLeftG) {
         for (int i=0; i<song.systemLen; i++) {
-          int total=(cycles*runtotal[i])/(size<<MASTER_CLOCK_PREC);
-          disCont[i].acquire(runPos[i],total);
-          runLeft[i]-=total;
-          runPos[i]+=total;
+          int total=(cycles*disCont[i].runtotal)/(size<<MASTER_CLOCK_PREC);
+          disCont[i].acquire(disCont[i].runPos,total);
+          disCont[i].runLeft-=total;
+          disCont[i].runPos+=total;
         }
         runLeftG-=cycles;
         cycles=0;
@@ -1389,8 +1483,8 @@ void DivEngine::nextBuf(float** in, float** out, int inChans, int outChans, unsi
         cycles-=runLeftG;
         runLeftG=0;
         for (int i=0; i<song.systemLen; i++) {
-          disCont[i].acquire(runPos[i],runLeft[i]);
-          runLeft[i]=0;
+          disCont[i].acquire(disCont[i].runPos,disCont[i].runLeft);
+          disCont[i].runLeft=0;
         }
       }
     }
@@ -1411,7 +1505,7 @@ void DivEngine::nextBuf(float** in, float** out, int inChans, int outChans, unsi
   totalProcessed=size-(runLeftG>>MASTER_CLOCK_PREC);
 
   for (int i=0; i<song.systemLen; i++) {
-    disCont[i].fillBuf(runtotal[i],lastAvail[i],size-lastAvail[i]);
+    disCont[i].fillBuf(disCont[i].runtotal,disCont[i].lastAvail,size-disCont[i].lastAvail);
   }
 
   for (int i=0; i<song.systemLen; i++) {

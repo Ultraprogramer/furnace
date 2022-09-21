@@ -135,12 +135,19 @@ void FurnaceGUI::drawSysConf(int chan, DivSystem type, unsigned int& flags, bool
       if (ImGui::RadioButton("5.95MHz (PAL)",(flags&3)==1)) {
         copyOfFlags=(flags&(~3))|1;
       }
-      ImGui::Text("Chip revision (sample memory):");
-      if (ImGui::RadioButton("A/B/E (8K)",(flags&16)==0)) {
+      ImGui::Text("Sample memory:");
+      if (ImGui::RadioButton("8K (rev A/B/E)",(flags&16)==0)) {
         copyOfFlags=(flags&(~16))|0;
       }
-      if (ImGui::RadioButton("D/F (64K)",(flags&16)==16)) {
+      if (ImGui::RadioButton("64K (rev D/F)",(flags&16)==16)) {
         copyOfFlags=(flags&(~16))|16;
+      }
+      ImGui::Text("DAC resolution");
+      if (ImGui::RadioButton("16-bit (rev A/B/D/F)",(flags&32)==0)) {
+        copyOfFlags=(flags&(~32))|0;
+      }
+      if (ImGui::RadioButton("1-bit PDM (rev C/E)",(flags&32)==32)) {
+        copyOfFlags=(flags&(~32))|32;
       }
       bool echo=flags&4;
       if (ImGui::Checkbox("Enable echo",&echo)) {
@@ -185,6 +192,19 @@ void FurnaceGUI::drawSysConf(int chan, DivSystem type, unsigned int& flags, bool
       if (ImGui::Checkbox("Disable anti-click",&antiClick)) {
         copyOfFlags=(flags&(~8))|(antiClick<<3);
       }
+      ImGui::Text("Chip revision:");
+      if (ImGui::RadioButton("Original (DMG)",(flags&7)==0)) {
+        copyOfFlags=(flags&(~7))|0;
+      }
+      if (ImGui::RadioButton("Game Boy Color (rev C)",(flags&7)==1)) {
+        copyOfFlags=(flags&(~7))|1;
+      }
+      if (ImGui::RadioButton("Game Boy Color (rev E)",(flags&7)==2)) {
+        copyOfFlags=(flags&(~7))|2;
+      }
+      if (ImGui::RadioButton("Game Boy Advance",(flags&7)==3)) {
+        copyOfFlags=(flags&(~7))|3;
+      }
       break;
     }
     case DIV_SYSTEM_OPLL:
@@ -197,7 +217,7 @@ void FurnaceGUI::drawSysConf(int chan, DivSystem type, unsigned int& flags, bool
       if (ImGui::RadioButton("PAL (3.55MHz)",(flags&15)==1)) {
         copyOfFlags=(flags&(~15))|1;
       }
-      if (ImGui::RadioButton("BBC Micro (4MHz)",(flags&15)==2)) {
+      if (ImGui::RadioButton("Arcade (4MHz)",(flags&15)==2)) {
         copyOfFlags=(flags&(~15))|2;
       }
       if (ImGui::RadioButton("Half NTSC (1.79MHz)",(flags&15)==3)) {
@@ -379,6 +399,24 @@ void FurnaceGUI::drawSysConf(int chan, DivSystem type, unsigned int& flags, bool
       bool bypassLimits=flags&4;
       if (ImGui::Checkbox("Bypass frequency limits",&bypassLimits)) {
         copyOfFlags=(flags&(~4))|(bypassLimits<<2);
+      }
+      break;
+    }
+    case DIV_SYSTEM_TIA: {
+      ImGui::Text("Mixing mode:");
+      if (ImGui::RadioButton("Mono",(flags&6)==0)) {
+        copyOfFlags=(flags&(~6));
+      }
+      if (ImGui::RadioButton("Mono (no distortion)",(flags&6)==2)) {
+        copyOfFlags=(flags&(~6))|2;
+      }
+      if (ImGui::RadioButton("Stereo",(flags&6)==4)) {
+        copyOfFlags=(flags&(~6))|4;
+      }
+
+      sysPal=flags&1;
+      if (ImGui::Checkbox("PAL",&sysPal)) {
+        copyOfFlags=(flags&(~1))|(unsigned int)sysPal;
       }
       break;
     }

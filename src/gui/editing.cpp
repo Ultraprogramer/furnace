@@ -24,7 +24,7 @@
 
 #include "actionUtil.h"
 
-const char* noteNameNormal(short note, short octave) {
+const char* FurnaceGUI::noteNameNormal(short note, short octave) {
   if (note==100) { // note cut
     return "OFF";
   } else if (note==101) { // note off and envelope release
@@ -431,7 +431,7 @@ void FurnaceGUI::doPaste(PasteMode mode) {
   int startOff=-1;
   bool invalidData=false;
   if (data.size()<2) return;
-  if (data[0]!=fmt::sprintf("org.tildearrow.furnace - Pattern Data (%d)",DIV_ENGINE_VERSION)) return;
+  if (data[0].find("org.tildearrow.furnace - Pattern Data")!=0) return;
   if (sscanf(data[1].c_str(),"%d",&startOff)!=1) return;
   if (startOff<0) return;
 
@@ -577,7 +577,7 @@ void FurnaceGUI::doChangeIns(int ins) {
     if (!e->curSubSong->chanShow[iCoarse]) continue;
     DivPattern* pat=e->curPat[iCoarse].getPattern(e->curOrders->ord[iCoarse][curOrder],true);
     for (int j=selStart.y; j<=selEnd.y; j++) {
-      if (pat->data[j][2]!=-1 || !(pat->data[j][0]==0 && pat->data[j][1]==0)) {
+      if (pat->data[j][2]!=-1 || !((pat->data[j][0]==0 || pat->data[j][0]==100 || pat->data[j][0]==101 || pat->data[j][0]==102) && pat->data[j][1]==0)) {
         pat->data[j][2]=ins;
       }
     }
@@ -616,9 +616,9 @@ void FurnaceGUI::doInterpolate() {
         }
       } else {
         for (int j=selStart.y; j<=selEnd.y; j++) {
-          if (pat->data[j][0]!=0 && pat->data[j][1]!=0) {
+          if (pat->data[j][0]!=0 || pat->data[j][1]!=0) {
             if (pat->data[j][0]!=100 && pat->data[j][0]!=101 && pat->data[j][0]!=102) {
-              points.emplace(points.end(),j,pat->data[j][0]+pat->data[j][1]*12);
+              points.emplace(points.end(),j,pat->data[j][0]+(signed char)pat->data[j][1]*12);
             }
           }
         }

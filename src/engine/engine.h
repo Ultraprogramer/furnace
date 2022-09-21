@@ -32,7 +32,8 @@
 #include <thread>
 #include <mutex>
 #include <map>
-#include <queue>
+#include <unordered_map>
+#include <deque>
 
 #define addWarning(x) \
   if (warnings.empty()) { \
@@ -45,9 +46,8 @@
 #define BUSY_BEGIN_SOFT softLocked=true; isBusy.lock();
 #define BUSY_END isBusy.unlock(); softLocked=false;
 
-#define DIV_VERSION "dev105"
-#define DIV_ENGINE_VERSION 105
-
+#define DIV_VERSION "dev114"
+#define DIV_ENGINE_VERSION 114
 // for imports
 #define DIV_VERSION_MOD 0xff01
 #define DIV_VERSION_FC 0xff02
@@ -164,7 +164,7 @@ struct DivNoteEvent {
 struct DivDispatchContainer {
   DivDispatch* dispatch;
   blip_buffer_t* bb[2];
-  size_t bbInLen;
+  size_t bbInLen, runtotal, runLeft, runPos, lastAvail;
   int temp[2], prevSample[2];
   short* bbIn[2];
   short* bbOut[2];
@@ -182,6 +182,10 @@ struct DivDispatchContainer {
     dispatch(NULL),
     bb{NULL,NULL},
     bbInLen(0),
+    runtotal(0),
+    runLeft(0),
+    runPos(0),
+    lastAvail(0),
     temp{0,0},
     prevSample{0,0},
     bbIn{NULL,NULL},
@@ -190,7 +194,29 @@ struct DivDispatchContainer {
     dcOffCompensation(false) {}
 };
 
-typedef std::function<bool(int,unsigned char,unsigned char)> EffectProcess;
+typedef int EffectValConversion(unsigned char,unsigned char);
+
+struct EffectHandler {
+  DivDispatchCmds dispatchCmd;
+  const char* description;
+  EffectValConversion* val;
+  EffectValConversion* val2;
+  EffectHandler(
+    DivDispatchCmds dispatchCmd_,
+    const char* description_,
+    EffectValConversion val_=NULL,
+    EffectValConversion val2_=NULL
+  ):
+  dispatchCmd(dispatchCmd_),
+  description(description_),
+  val(val_),
+  val2(val2_) {}
+};
+
+struct DivDoNotHandleEffect {
+};
+
+typedef std::unordered_map<unsigned char,const EffectHandler> EffectHandlerMap;
 
 struct DivSysDef {
   const char* name;
@@ -207,8 +233,8 @@ struct DivSysDef {
   // 0: primary
   // 1: alternate (usually PCM)
   DivInstrumentType chanInsType[DIV_MAX_CHANS][2];
-  EffectProcess effectFunc;
-  EffectProcess postEffectFunc;
+  const EffectHandlerMap effectHandlers;
+  const EffectHandlerMap postEffectHandlers;
   DivSysDef(
     const char* sysName, const char* sysNameJ, unsigned char fileID, unsigned char fileID_DMF, int chans,
     bool isFMChip, bool isSTDChip, unsigned int vgmVer, bool compound, const char* desc,
@@ -217,8 +243,8 @@ struct DivSysDef {
     std::initializer_list<int> chTypes,
     std::initializer_list<DivInstrumentType> chInsType1,
     std::initializer_list<DivInstrumentType> chInsType2={},
-    EffectProcess fxHandler=[](int,unsigned char,unsigned char) -> bool {return false;},
-    EffectProcess postFxHandler=[](int,unsigned char,unsigned char) -> bool {return false;}):
+    const EffectHandlerMap fxHandlers_={},
+    const EffectHandlerMap postFxHandlers_={}):
     name(sysName),
     nameJ(sysNameJ),
     description(desc),
@@ -229,8 +255,8 @@ struct DivSysDef {
     isSTD(isSTDChip),
     isCompound(compound),
     vgmVersion(vgmVer),
-    effectFunc(fxHandler),
-    postEffectFunc(postFxHandler) {
+    effectHandlers(fxHandlers_),
+    postEffectHandlers(postFxHandlers_) {
     memset(chanNames,0,DIV_MAX_CHANS*sizeof(void*));
     memset(chanShortNames,0,DIV_MAX_CHANS*sizeof(void*));
     memset(chanTypes,0,DIV_MAX_CHANS*sizeof(int));
@@ -330,7 +356,9 @@ class DivEngine {
   DivAudioExportModes exportMode;
   double exportFadeOut;
   std::map<String,String> conf;
-  std::queue<DivNoteEvent> pendingNotes;
+  std::deque<DivNoteEvent> pendingNotes;
+  // bitfield
+  unsigned char walked[8192];
   bool isMuted[DIV_MAX_CHANS];
   std::mutex isBusy, saveLock;
   String configPath;
@@ -424,7 +452,7 @@ class DivEngine {
   int loadSampleROM(String path, ssize_t expectedSize, unsigned char*& ret);
 
   bool initAudioBackend();
-  bool deinitAudioBackend();
+  bool deinitAudioBackend(bool dueToSwitchMaster=false);
 
   void registerSystems();
   void initSongWithDesc(const int* description);
@@ -516,6 +544,7 @@ class DivEngine {
     void setConf(String key, int value);
     void setConf(String key, float value);
     void setConf(String key, double value);
+    void setConf(String key, const char* value);
     void setConf(String key, String value);
 
     // calculate base frequency/period
@@ -526,6 +555,9 @@ class DivEngine {
 
     // calculate frequency/period
     int calcFreq(int base, int pitch, bool period=false, int octave=0, int pitch2=0, double clock=1.0, double divider=1.0, int blockBits=0);
+
+    // calculate arpeggio
+    int calcArp(int note, int arp, int offset=0);
 
     // convert panning formats
     int convertPanSplitToLinear(unsigned int val, unsigned char bits, int range);
@@ -596,6 +628,9 @@ class DivEngine {
 
     // get japanese system name
     const char* getSystemNameJ(DivSystem sys);
+    
+    // get sys definition
+    const DivSysDef* getSystemDef(DivSystem sys);
     
     // convert sample rate format
     int fileToDivRate(int frate);
@@ -702,8 +737,11 @@ class DivEngine {
     // add wavetable
     int addWave();
 
-    // add wavetable from file
-    bool addWaveFromFile(const char* path, bool loadRaw=true);
+    // add wavetable from pointer
+    int addWavePtr(DivWavetable* which);
+
+    // get wavetable from file
+    DivWavetable* waveFromFile(const char* path, bool loadRaw=true);
 
     // delete wavetable
     void delWave(int index);
@@ -711,8 +749,14 @@ class DivEngine {
     // add sample
     int addSample();
 
-    // add sample from file
-    int addSampleFromFile(const char* path);
+    // add sample from pointer
+    int addSamplePtr(DivSample* which);
+
+    // get sample from file
+    DivSample* sampleFromFile(const char* path);
+
+    // get raw sample
+    DivSample* sampleFromFileRaw(const char* path, DivSampleDepth depth, int channels, bool bigEndian, bool unsign);
 
     // delete sample
     void delSample(int index);
@@ -869,6 +913,9 @@ class DivEngine {
 
     // remove system
     bool removeSystem(int index, bool preserveOrder=true);
+
+    // move system
+    bool swapSystem(int src, int dest, bool preserveOrder=true);
     
     // write to register on system
     void poke(int sys, unsigned int addr, unsigned short val);
@@ -1027,6 +1074,7 @@ class DivEngine {
       memset(reversePitchTable,0,4096*sizeof(int));
       memset(pitchTable,0,4096*sizeof(int));
       memset(sysDefs,0,256*sizeof(void*));
+      memset(walked,0,8192);
 
       for (int i=0; i<256; i++) {
         sysFileMapFur[i]=DIV_SYSTEM_NULL;

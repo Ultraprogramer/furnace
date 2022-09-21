@@ -22,7 +22,7 @@ bug fixes, improvements and several other things accepted.
 
 the coding style is described here:
 
-- indentation: two spaces
+- indentation: two spaces. **strictly** spaces. do NOT use tabs.
 - modified 1TBS style:
   - no spaces in function calls
   - spaces between arguments in function declarations
@@ -33,6 +33,7 @@ the coding style is described here:
   - indent switch cases
   - preprocessor directives not intended
   - if macro comprises more than one line, indent
+  - no new line after `template<>`
 - prefer built-in types:
   - `bool`
   - `signed char` or `unsigned char` are 8-bit
@@ -81,6 +82,7 @@ just put your demo song in `demos/`! be noted there are some guidelines:
 
 - avoid Nintendo song covers.
 - avoid big label song covers.
+- avoid poor quality songs.
 
 # Finishing
 

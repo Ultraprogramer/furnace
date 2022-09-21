@@ -23,6 +23,7 @@ set(USE_SNDFILE_DEFAULT ON)
 set(SYSTEM_SDL2_DEFAULT OFF)
 
 include(CheckIncludeFile)
+include(TestBigEndian)
 
 if (ANDROID)
   set(USE_RTMIDI_DEFAULT OFF)
@@ -72,9 +73,15 @@ option(WITH_INSTRUMENTS "Install instruments" ON)
 set(DEPENDENCIES_INCLUDE_DIRS "")
 
 if (ANDROID AND NOT TERMUX)
-set(DEPENDENCIES_DEFINES "IS_MOBILE")
+  set(DEPENDENCIES_DEFINES "IS_MOBILE")
 else()
-set(DEPENDENCIES_DEFINES "")
+  set(DEPENDENCIES_DEFINES "")
+endif()
+
+TEST_BIG_ENDIAN(IS_BIG_ENDIAN)
+
+if (IS_BIG_ENDIAN)
+  list(APPEND DEPENDENCIES_DEFINES "TA_BIG_ENDIAN")
 endif()
 
 set(DEPENDENCIES_COMPILE_OPTIONS "")
@@ -361,7 +368,26 @@ src/engine/platform/sound/c64/wave8580_PST.cc
 src/engine/platform/sound/c64/wave8580_P_T.cc
 src/engine/platform/sound/c64/wave8580__ST.cc
 
-src/engine/platform/sound/tia/TIASnd.cpp
+src/engine/platform/sound/c64_fp/Dac.cpp
+src/engine/platform/sound/c64_fp/EnvelopeGenerator.cpp
+src/engine/platform/sound/c64_fp/ExternalFilter.cpp
+src/engine/platform/sound/c64_fp/Filter6581.cpp
+src/engine/platform/sound/c64_fp/Filter8580.cpp
+src/engine/platform/sound/c64_fp/Filter.cpp
+src/engine/platform/sound/c64_fp/FilterModelConfig6581.cpp
+src/engine/platform/sound/c64_fp/FilterModelConfig8580.cpp
+src/engine/platform/sound/c64_fp/FilterModelConfig.cpp
+src/engine/platform/sound/c64_fp/Integrator6581.cpp
+src/engine/platform/sound/c64_fp/Integrator8580.cpp
+src/engine/platform/sound/c64_fp/OpAmp.cpp
+src/engine/platform/sound/c64_fp/SID.cpp
+src/engine/platform/sound/c64_fp/Spline.cpp
+src/engine/platform/sound/c64_fp/WaveformCalculator.cpp
+src/engine/platform/sound/c64_fp/WaveformGenerator.cpp
+src/engine/platform/sound/c64_fp/resample/SincResampler.cpp
+
+src/engine/platform/sound/tia/AudioChannel.cpp
+src/engine/platform/sound/tia/Audio.cpp
 
 src/engine/platform/sound/ymfm/ymfm_adpcm.cpp
 src/engine/platform/sound/ymfm/ymfm_opm.cpp
@@ -531,6 +557,7 @@ src/gui/midiMap.cpp
 src/gui/newSong.cpp
 src/gui/orders.cpp
 src/gui/osc.cpp
+src/gui/patManager.cpp
 src/gui/pattern.cpp
 src/gui/piano.cpp
 src/gui/presets.cpp
@@ -544,6 +571,8 @@ src/gui/stats.cpp
 src/gui/subSongs.cpp
 src/gui/sysConf.cpp
 src/gui/sysEx.cpp
+src/gui/sysManager.cpp
+src/gui/sysPicker.cpp
 src/gui/util.cpp
 src/gui/waveEdit.cpp
 src/gui/volMeter.cpp
