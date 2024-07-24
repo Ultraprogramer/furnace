@@ -1,6 +1,6 @@
 /**
  * Furnace Tracker - multi-system chiptune tracker
- * Copyright (C) 2021-2022 tildearrow and contributors
+ * Copyright (C) 2021-2024 tildearrow and contributors
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -32,10 +32,10 @@ DivSystem FurnaceGUI::systemPicker() {
   }
 
   ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
-  if (ImGui::InputTextWithHint("##SysSearch","Search...",&sysSearchQuery)) reissueSearch=true;
+  if (ImGui::InputTextWithHint("##SysSearch",_("Search..."),&sysSearchQuery)) reissueSearch=true;
   if (ImGui::BeginTabBar("SysCats")) {
     for (int i=0; chipCategories[i]; i++) {
-      if (ImGui::BeginTabItem(chipCategoryNames[i])) {
+      if (ImGui::BeginTabItem(_(chipCategoryNames[i]))) {
         if (ImGui::IsItemActive()) {
           reissueSearch=true;
         }

@@ -1,6 +1,6 @@
 /**
  * Furnace Tracker - multi-system chiptune tracker
- * Copyright (C) 2021-2022 tildearrow and contributors
+ * Copyright (C) 2021-2024 tildearrow and contributors
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -19,27 +19,23 @@
 
 #ifndef _SAA_H
 #define _SAA_H
+
 #include "../dispatch.h"
-#include "../macroInt.h"
-#include <queue>
+#include "../../fixedQueue.h"
 #include "../../../extern/SAASound/src/SAASound.h"
 
 class DivPlatformSAA1099: public DivDispatch {
   protected:
-    struct Channel {
+    struct Channel: public SharedChannel<int> {
       unsigned char freqH, freqL;
-      int freq, baseFreq, pitch, pitch2, note, ins;
       unsigned char psgMode;
-      signed char konCycles;
-      bool active, insChanged, freqChanged, keyOn, keyOff, portaPause, inPorta;
-      int vol, outVol;
       unsigned char pan;
-      DivMacroInt std;
-      void macroInit(DivInstrument* which) {
-        std.init(which);
-        pitch2=0;
-      }
-      Channel(): freqH(0), freqL(0), freq(0), baseFreq(0), pitch(0), pitch2(0), note(0), ins(-1), psgMode(1), active(false), insChanged(true), freqChanged(false), keyOn(false), keyOff(false), portaPause(false), inPorta(false), vol(0), outVol(15), pan(255) {}
+      Channel():
+        SharedChannel<int>(15),
+        freqH(0),
+        freqL(0),
+        psgMode(1),
+        pan(255) {}
     };
     Channel chan[6];
     DivDispatchOscBuffer* oscBuf[6];
@@ -48,9 +44,11 @@ class DivPlatformSAA1099: public DivDispatch {
       unsigned short addr;
       unsigned char val;
       bool addrOrVal;
+      QueuedWrite(): addr(0), val(0), addrOrVal(false) {}
       QueuedWrite(unsigned short a, unsigned char v): addr(a), val(v), addrOrVal(false) {}
     };
-    std::queue<QueuedWrite> writes;
+    FixedQueue<QueuedWrite,256> writes;
+    int coreQuality;
     CSAASound* saa_saaSound;
     unsigned char regPool[32];
     unsigned char lastBusy;
@@ -72,15 +70,17 @@ class DivPlatformSAA1099: public DivDispatch {
     size_t saaBufLen;
     unsigned char saaEnv[2];
     unsigned char saaNoise[2];
+    friend void putDispatchChip(void*,int);
     friend void putDispatchChan(void*,int,int);
 
-    void acquire_saaSound(short* bufL, short* bufR, size_t start, size_t len);
+    void acquire_saaSound(short** buf, size_t len);
   
   public:
-    void acquire(short* bufL, short* bufR, size_t start, size_t len);
+    void acquire(short** buf, size_t len);
     int dispatch(DivCommand c);
     void* getChanState(int chan);
     DivMacroInt* getChanMacroInt(int ch);
+    unsigned short getPan(int chan);
     DivDispatchOscBuffer* getOscBuffer(int chan);
     unsigned char* getRegisterPool();
     int getRegisterPoolSize();
@@ -88,15 +88,17 @@ class DivPlatformSAA1099: public DivDispatch {
     void forceIns();
     void tick(bool sysTick=true);
     void muteChannel(int ch, bool mute);
-    void setFlags(unsigned int flags);
-    bool isStereo();
+    void setFlags(const DivConfig& flags);
+    int getOutputCount();
     int getPortaFloor(int ch);
     bool keyOffAffectsArp(int ch);
+    bool getLegacyAlwaysSetVolume();
     void notifyInsDeletion(void* ins);
     void poke(unsigned int addr, unsigned short val);
     void poke(std::vector<DivRegWrite>& wlist);
     const char** getRegisterSheet();
-    int init(DivEngine* parent, int channels, int sugRate, unsigned int flags);
+    void setCoreQuality(unsigned char q);
+    int init(DivEngine* parent, int channels, int sugRate, const DivConfig& flags);
     void quit();
 };
 #endif

@@ -1,6 +1,9 @@
-# to-do for 0.6pre1.5
+# to-do long term
 
-- stereo separation control for AY
-- "paste with instrument"
-- auto-detect system
-- bug fixes
+- CSM macros
+- finish auto-clone
+- new pattern renderer - performance improvements
+- new info header
+- unlimited channels and chips
+- fix possible issues when moving selection
+- fix Metal intro crash

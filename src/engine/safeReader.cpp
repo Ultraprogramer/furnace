@@ -1,6 +1,6 @@
 /**
  * Furnace Tracker - multi-system chiptune tracker
- * Copyright (C) 2021-2022 tildearrow and contributors
+ * Copyright (C) 2021-2024 tildearrow and contributors
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -136,7 +136,9 @@ float SafeReader::readF() {
   memcpy(&ret,&buf[curSeek],4);
   curSeek+=4;
   ret=((ret>>24)|((ret&0xff0000)>>8)|((ret&0xff00)<<8)|((ret&0xff)<<24));
-  return *((float*)(&ret));
+  float realRet;
+  memcpy(&realRet,&ret,4);
+  return realRet;
 }
 
 double SafeReader::readD() {
@@ -153,7 +155,9 @@ double SafeReader::readD() {
   retB[5]=ret[2];
   retB[6]=ret[1];
   retB[7]=ret[0];
-  return *((double*)retB);
+  double realRet;
+  memcpy(&realRet,retB,8);
+  return realRet;
 }
 #else
 short SafeReader::readS() {
@@ -225,31 +229,79 @@ double SafeReader::readD() {
 }
 #endif
 
-String SafeReader::readString(size_t stlen) {
+String SafeReader::readStringWithEncoding(DivStringEncoding encoding, size_t stlen) {
   String ret;
 #ifdef READ_DEBUG
   logD("SR: reading string len %d at %x",stlen,curSeek);
 #endif
   size_t curPos=0;
   if (isEOF()) throw EndOfFileException(this, len);
+  bool zero=false;
 
   while (!isEOF() && curPos<stlen) {
     unsigned char c=readC();
-    if (c!=0) ret.push_back(c);
+    if (c==0) {
+      zero=true;
+    }
+    if (!zero) {
+      if (encoding==DIV_ENCODING_LATIN1) {
+        if (c>=0x20) {
+          if (c&0x80) {
+            if (c>=0xa0) {
+              ret.push_back(0xc0|(c>>6));
+              ret.push_back(0x80|(c&63));
+            }
+          } else {
+            ret.push_back(c);
+          }
+        }
+      } else {
+        ret.push_back(c);
+      }
+    }
     curPos++;
   }
   return ret;
 }
 
-String SafeReader::readString() {
+String SafeReader::readStringWithEncoding(DivStringEncoding encoding) {
   String ret;
   unsigned char c;
   if (isEOF()) throw EndOfFileException(this, len);
 
   while (!isEOF() && (c=readC())!=0) {
-    ret.push_back(c);
+    if (encoding==DIV_ENCODING_LATIN1) {
+      if (c>=0x20) {
+        if (c&0x80) {
+          if (c>=0xa0) {
+            ret.push_back(0xc0|(c>>6));
+            ret.push_back(0x80|(c&63));
+          }
+        } else {
+          ret.push_back(c);
+        }
+      }
+    } else {
+      ret.push_back(c);
+    }
   }
   return ret;
+}
+
+String SafeReader::readString() {
+  return readStringWithEncoding(DIV_ENCODING_NONE);
+}
+
+String SafeReader::readString(size_t stlen) {
+  return readStringWithEncoding(DIV_ENCODING_NONE,stlen);
+}
+
+String SafeReader::readStringLatin1() {
+  return readStringWithEncoding(DIV_ENCODING_LATIN1);
+}
+
+String SafeReader::readStringLatin1(size_t stlen) {
+  return readStringWithEncoding(DIV_ENCODING_LATIN1,stlen);
 }
 
 String SafeReader::readStringLine() {

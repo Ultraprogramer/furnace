@@ -1,6 +1,6 @@
 /**
  * Furnace Tracker - multi-system chiptune tracker
- * Copyright (C) 2021-2022 tildearrow and contributors
+ * Copyright (C) 2021-2024 tildearrow and contributors
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -18,8 +18,12 @@
  */
 
 #include "../dispatch.h"
+#include "../../ta-log.h"
 
-void DivDispatch::acquire(short* bufL, short* bufR, size_t start, size_t len) {
+void DivDispatch::acquire(short** buf, size_t len) {
+}
+
+void DivDispatch::fillStream(std::vector<DivDelayedWrite>& stream, int sRate, size_t len) {
 }
 
 void DivDispatch::tick(bool sysTick) {
@@ -29,8 +33,24 @@ void* DivDispatch::getChanState(int chan) {
   return NULL;
 }
 
+unsigned short DivDispatch::getPan(int chan) {
+  return 0;
+}
+
+DivChannelPair DivDispatch::getPaired(int chan) {
+  return DivChannelPair();
+}
+
+DivChannelModeHints DivDispatch::getModeHints(int chan) {
+  return DivChannelModeHints();
+}
+
 DivMacroInt* DivDispatch::getChanMacroInt(int chan) {
   return NULL;
+}
+
+DivSamplePos DivDispatch::getSamplePos(int chan) {
+  return DivSamplePos();
 }
 
 DivDispatchOscBuffer* DivDispatch::getOscBuffer(int chan) {
@@ -66,8 +86,8 @@ int DivDispatch::dispatch(DivCommand c) {
 void DivDispatch::reset() {
 }
 
-bool DivDispatch::isStereo() {
-  return false;
+int DivDispatch::getOutputCount() {
+  return 1;
 }
 
 bool DivDispatch::keyOffAffectsArp(int ch) {
@@ -78,8 +98,26 @@ bool DivDispatch::keyOffAffectsPorta(int ch) {
   return false;
 }
 
+bool DivDispatch::isVolGlobal() {
+  return false;
+}
+
+int DivDispatch::mapVelocity(int ch, float vel) {
+  const int volMax=MAX(1,dispatch(DivCommand(DIV_CMD_GET_VOLMAX,MAX(ch,0))));
+  return round(vel*volMax);
+}
+
+float DivDispatch::getGain(int ch, int vol) {
+  const float volMax=MAX(1,dispatch(DivCommand(DIV_CMD_GET_VOLMAX,MAX(ch,0))));
+  return (float)vol/volMax;
+}
+
 int DivDispatch::getPortaFloor(int ch) {
   return 0x00;
+}
+
+bool DivDispatch::getLegacyAlwaysSetVolume() {
+  return true;
 }
 
 float DivDispatch::getPostAmp() {
@@ -94,7 +132,15 @@ bool DivDispatch::getWantPreNote() {
   return false;
 }
 
-void DivDispatch::setFlags(unsigned int flags) {
+int DivDispatch::getClockRangeMin() {
+  return MIN_CUSTOM_CLOCK;
+}
+
+int DivDispatch::getClockRangeMax() {
+  return MAX_CUSTOM_CLOCK;
+}
+
+void DivDispatch::setFlags(const DivConfig& flags) {
 }
 
 void DivDispatch::setSkipRegisterWrites(bool value) {
@@ -110,7 +156,8 @@ void DivDispatch::notifyWaveChange(int ins) {
 }
 
 void DivDispatch::notifyInsDeletion(void* ins) {
-
+  logE("notifyInsDeletion NOT implemented!");
+  abort();
 }
 
 void DivDispatch::notifyPlaybackStop() {
@@ -149,15 +196,31 @@ size_t DivDispatch::getSampleMemCapacity(int index) {
   return 0;
 }
 
+const char* DivDispatch::getSampleMemName(int index) {
+  return NULL;
+}
+
 size_t DivDispatch::getSampleMemUsage(int index) {
   return 0;
 }
 
-void DivDispatch::renderSamples() {
+const DivMemoryComposition* DivDispatch::getMemCompo(int index) {
+  return NULL;
+}
+
+bool DivDispatch::isSampleLoaded(int index, int sample) {
+  printf("you are calling.\n");
+  return false;
+}
+
+void DivDispatch::renderSamples(int sysID) {
   
 }
 
-int DivDispatch::init(DivEngine* p, int channels, int sugRate, unsigned int flags) {
+void DivDispatch::notifyPitchTable() {
+}
+
+int DivDispatch::init(DivEngine* p, int channels, int sugRate, const DivConfig& flags) {
   return 0;
 }
 

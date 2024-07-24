@@ -1,6 +1,6 @@
 /**
  * Furnace Tracker - multi-system chiptune tracker
- * Copyright (C) 2021-2022 tildearrow and contributors
+ * Copyright (C) 2021-2024 tildearrow and contributors
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -48,6 +48,7 @@ DivDataErrors DivWavetable::readWaveData(SafeReader& reader, short version) {
   char magic[4];
   reader.read(magic,4);
   if (memcmp(magic,"WAVE",4)!=0) {
+    logV("header is invalid: %c%c%c%c",magic[0],magic[1],magic[2],magic[3]);
     return DIV_DATA_INVALID_HEADER;
   }
   reader.readI(); // reserved
@@ -57,7 +58,20 @@ DivDataErrors DivWavetable::readWaveData(SafeReader& reader, short version) {
   min=reader.readI();
   max=reader.readI();
 
-  if (len>256 || min!=0 || max>255) return DIV_DATA_INVALID_DATA;
+  if (len>256) {
+    logE("invalid len: %d",len);
+    return DIV_DATA_INVALID_DATA;
+  }
+
+  if (min!=0) {
+    logW("invalid min %d",min);
+    min=0;
+  }
+
+  if (max>255) {
+    logW("invalid max %d",max);
+    max=255;
+  }
 
   for (int i=0; i<len; i++) {
     data[i]=reader.readI();

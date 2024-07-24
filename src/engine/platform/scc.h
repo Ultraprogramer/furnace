@@ -1,6 +1,6 @@
 /**
  * Furnace Tracker - multi-system chiptune tracker
- * Copyright (C) 2021-2022 tildearrow and contributors
+ * Copyright (C) 2021-2024 tildearrow and contributors
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -21,37 +21,18 @@
 #define _SCC_H
 
 #include "../dispatch.h"
-#include <queue>
-#include "../macroInt.h"
 #include "../waveSynth.h"
-#include "sound/scc/scc.hpp"
+#include "vgsound_emu/src/scc/scc.hpp"
 
 class DivPlatformSCC: public DivDispatch {
-  struct Channel {
-    int freq, baseFreq, pitch, pitch2, note, ins;
-    bool active, insChanged, freqChanged, freqInit, inPorta;
-    signed char vol, outVol, wave;
-    signed char waveROM[32] = {0}; // 4 bit PROM per channel on bubble system
-    DivMacroInt std;
+  struct Channel: public SharedChannel<signed char> {
+    bool freqInit;
+    signed short wave;
+    signed char waveROM[32] = {0}; // 8 bit signed waveform
     DivWaveSynth ws;
-    void macroInit(DivInstrument* which) {
-      std.init(which);
-      pitch2=0;
-    }
     Channel():
-      freq(0),
-      baseFreq(0),
-      pitch(0),
-      pitch2(0),
-      note(0),
-      ins(-1),
-      active(false),
-      insChanged(true),
-      freqChanged(false),
+      SharedChannel<signed char>(15),
       freqInit(false),
-      inPorta(false),
-      vol(15),
-      outVol(15),
       wave(-1) {}
   };
   Channel chan[5];
@@ -60,14 +41,16 @@ class DivPlatformSCC: public DivDispatch {
   unsigned char writeOscBuf;
   int lastUpdated34;
 
+  int coreQuality;
   scc_core* scc;
   bool isPlus;
   unsigned char regBase;
   unsigned char regPool[225];
   void updateWave(int ch);
+  friend void putDispatchChip(void*,int);
   friend void putDispatchChan(void*,int,int);
   public:
-    void acquire(short* bufL, short* bufR, size_t start, size_t len);
+    void acquire(short** buf, size_t len);
     int dispatch(DivCommand c);
     void* getChanState(int chan);
     DivMacroInt* getChanMacroInt(int ch);
@@ -78,14 +61,15 @@ class DivPlatformSCC: public DivDispatch {
     void forceIns();
     void tick(bool sysTick=true);
     void muteChannel(int ch, bool mute);
-    bool isStereo();
+    int getOutputCount();
     void notifyWaveChange(int wave);
     void notifyInsDeletion(void* ins);
     void poke(unsigned int addr, unsigned short val);
     void poke(std::vector<DivRegWrite>& wlist);
     const char** getRegisterSheet();
-    void setFlags(unsigned int flags);
-    int init(DivEngine* parent, int channels, int sugRate, unsigned int flags);
+    void setFlags(const DivConfig& flags);
+    int init(DivEngine* parent, int channels, int sugRate, const DivConfig& flags);
+    void setCoreQuality(unsigned char q);
     void setChipModel(bool isPlus);
     void quit();
     ~DivPlatformSCC();

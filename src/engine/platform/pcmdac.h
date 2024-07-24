@@ -1,6 +1,6 @@
 /**
  * Furnace Tracker - multi-system chiptune tracker
- * Copyright (C) 2021-2022 tildearrow and contributors
+ * Copyright (C) 2021-2024 tildearrow and contributors
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -21,64 +21,55 @@
 #define _PCM_DAC_H
 
 #include "../dispatch.h"
-#include <queue>
-#include "../macroInt.h"
 #include "../waveSynth.h"
 
 class DivPlatformPCMDAC: public DivDispatch {
-  struct Channel {
-    int freq, baseFreq, pitch, pitch2;
+  struct Channel: public SharedChannel<int> {
+    bool audDir;
     unsigned int audLoc;
     unsigned short audLen;
-    unsigned int audPos;
+    short audDat[8];
+    int audPos;
     int audSub;
-    int sample, wave, ins;
-    int note;
+    int sample, wave;
     int panL, panR;
-    bool active, insChanged, freqChanged, keyOn, keyOff, inPorta, useWave, setPos;
-    int vol, envVol;
-    DivMacroInt std;
+    bool useWave, setPos;
+    int envVol;
     DivWaveSynth ws;
-    void macroInit(DivInstrument* which) {
-      std.init(which);
-      pitch2=0;
-    }
     Channel():
-      freq(0),
-      baseFreq(0),
-      pitch(0),
-      pitch2(0),
+      SharedChannel<int>(255),
+      audDir(false),
       audLoc(0),
       audLen(0),
+      audDat{0,0,0,0,0,0,0,0},
       audPos(0),
       audSub(0),
       sample(-1),
       wave(-1),
-      ins(-1),
-      note(0),
       panL(255),
       panR(255),
-      active(false),
-      insChanged(true),
-      freqChanged(false),
-      keyOn(false),
-      keyOff(false),
-      inPorta(false),
       useWave(false),
       setPos(false),
-      vol(255),
       envVol(64) {}
   };
-  Channel chan;
+  Channel chan[1];
   DivDispatchOscBuffer* oscBuf;
   bool isMuted;
   int outDepth;
+  // valid values:
+  // - 0: none
+  // - 1: linear
+  // - 2: cubic spline
+  // - 3: sinc
+  int interp;
+  int volMax;
   bool outStereo;
 
+  friend void putDispatchChip(void*,int);
   friend void putDispatchChan(void*,int,int);
 
   public:
-    void acquire(short* bufL, short* bufR, size_t start, size_t len);
+    void acquire(short** buf, size_t len);
     int dispatch(DivCommand c);
     void* getChanState(int chan);
     DivDispatchOscBuffer* getOscBuffer(int chan);
@@ -86,13 +77,15 @@ class DivPlatformPCMDAC: public DivDispatch {
     void forceIns();
     void tick(bool sysTick=true);
     void muteChannel(int ch, bool mute);
-    bool isStereo();
+    int getOutputCount();
     DivMacroInt* getChanMacroInt(int ch);
-    void setFlags(unsigned int flags);
+    unsigned short getPan(int chan);
+    DivSamplePos getSamplePos(int ch);
+    void setFlags(const DivConfig& flags);
     void notifyInsChange(int ins);
     void notifyWaveChange(int wave);
     void notifyInsDeletion(void* ins);
-    int init(DivEngine* parent, int channels, int sugRate, unsigned int flags);
+    int init(DivEngine* parent, int channels, int sugRate, const DivConfig& flags);
     void quit();
 };
 

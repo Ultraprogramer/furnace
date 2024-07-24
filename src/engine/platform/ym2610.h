@@ -1,6 +1,6 @@
 /**
  * Furnace Tracker - multi-system chiptune tracker
- * Copyright (C) 2021-2022 tildearrow and contributors
+ * Copyright (C) 2021-2024 tildearrow and contributors
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -19,39 +19,8 @@
 
 #ifndef _YM2610_H
 #define _YM2610_H
-#include "fmshared_OPN.h"
-#include "../macroInt.h"
-#include "ay.h"
-#include "sound/ymfm/ymfm_opn.h"
 
-class DivYM2610Interface: public ymfm::ymfm_interface {
-  public:
-    unsigned char* adpcmAMem;
-    unsigned char* adpcmBMem;
-    int sampleBank;
-    uint8_t ymfm_external_read(ymfm::access_class type, uint32_t address);
-    void ymfm_external_write(ymfm::access_class type, uint32_t address, uint8_t data);
-    DivYM2610Interface(): adpcmAMem(NULL), adpcmBMem(NULL), sampleBank(0) {}
-};
-
-class DivPlatformYM2610Base: public DivPlatformOPN {
-  protected:
-    unsigned char* adpcmAMem;
-    size_t adpcmAMemLen;
-    unsigned char* adpcmBMem;
-    size_t adpcmBMemLen;
-    DivYM2610Interface iface;
-
-  public:
-    const void* getSampleMem(int index);
-    size_t getSampleMemCapacity(int index);
-    size_t getSampleMemUsage(int index);
-    void renderSamples();
-    int init(DivEngine* parent, int channels, int sugRate, unsigned int flags);
-    void quit();
-    DivPlatformYM2610Base():
-      DivPlatformOPN(9440540.0, 72, 32) {}
-};
+#include "ym2610shared.h"
 
 class DivPlatformYM2610: public DivPlatformYM2610Base {
   protected:
@@ -67,71 +36,20 @@ class DivPlatformYM2610: public DivPlatformYM2610Base {
       1, 2, 4, 5
     };
 
-    struct Channel {
-      DivInstrumentFM state;
-      unsigned char freqH, freqL;
-      int freq, baseFreq, pitch, pitch2, portaPauseFreq, note, ins;
-      unsigned char psgMode, autoEnvNum, autoEnvDen;
-      signed char konCycles;
-      bool active, insChanged, freqChanged, keyOn, keyOff, portaPause, inPorta, furnacePCM, hardReset, opMaskChanged;
-      int vol, outVol;
-      int sample;
-      unsigned char pan, opMask;
-      DivMacroInt std;
-      void macroInit(DivInstrument* which) {
-        std.init(which);
-        pitch2=0;
-      }
-      Channel():
-        freqH(0),
-        freqL(0),
-        freq(0),
-        baseFreq(0),
-        pitch(0),
-        pitch2(0),
-        portaPauseFreq(0),
-        note(0),
-        ins(-1),
-        psgMode(1),
-        autoEnvNum(0),
-        autoEnvDen(0),
-        active(false),
-        insChanged(true),
-        freqChanged(false),
-        keyOn(false),
-        keyOff(false),
-        portaPause(false),
-        inPorta(false),
-        furnacePCM(false),
-        hardReset(false),
-        opMaskChanged(false),
-        vol(0),
-        outVol(15),
-        sample(-1),
-        pan(3),
-        opMask(15) {}
-    };
-    Channel chan[14];
-    DivDispatchOscBuffer* oscBuf[14];
-    bool isMuted[14];
-    ymfm::ym2610* fm;
-    ymfm::ym2610::output_data fmout;
+    friend void putDispatchChip(void*,int);
 
-    DivPlatformAY8910* ay;
-  
-    unsigned char sampleBank;
+    void commitState(int ch, DivInstrument* ins);
 
-    bool extMode;
-  
-    double NOTE_OPNB(int ch, int note);
-    double NOTE_ADPCMB(int note);
-    friend void putDispatchChan(void*,int,int);
-  
+    void acquire_combo(short** buf, size_t len);
+    void acquire_ymfm(short** buf, size_t len);
+    void acquire_lle(short** buf, size_t len);
+    
   public:
-    void acquire(short* bufL, short* bufR, size_t start, size_t len);
+    void acquire(short** buf, size_t len);
     int dispatch(DivCommand c);
     void* getChanState(int chan);
     DivMacroInt* getChanMacroInt(int ch);
+    virtual unsigned short getPan(int chan);
     DivDispatchOscBuffer* getOscBuffer(int chan);
     unsigned char* getRegisterPool();
     int getRegisterPoolSize();
@@ -139,17 +57,18 @@ class DivPlatformYM2610: public DivPlatformYM2610Base {
     void forceIns();
     void tick(bool sysTick=true);
     void muteChannel(int ch, bool mute);
-    bool isStereo();
+    int getOutputCount();
     bool keyOffAffectsArp(int ch);
     void notifyInsChange(int ins);
-    void notifyInsDeletion(void* ins);
+    virtual void notifyInsDeletion(void* ins);
     void setSkipRegisterWrites(bool val);
     void poke(unsigned int addr, unsigned short val);
     void poke(std::vector<DivRegWrite>& wlist);
     const char** getRegisterSheet();
-    void setFlags(unsigned int flags);
-    int init(DivEngine* parent, int channels, int sugRate, unsigned int flags);
+    int init(DivEngine* parent, int channels, int sugRate, const DivConfig& flags);
     void quit();
+    DivPlatformYM2610():
+      DivPlatformYM2610Base(1,4,7,13,14) {}
     ~DivPlatformYM2610();
 };
 #endif

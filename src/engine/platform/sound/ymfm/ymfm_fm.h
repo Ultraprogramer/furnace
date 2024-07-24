@@ -33,6 +33,8 @@
 
 #pragma once
 
+#define YMFM_DEBUG_LOG_WAVFILES (0)
+
 namespace ymfm
 {
 
@@ -162,8 +164,8 @@ template<class RegisterType> class fm_engine_base;
 template<class RegisterType>
 class fm_operator
 {
-	// "quiet" value, used to optimize when we can skip doing working
-	static constexpr uint32_t EG_QUIET = 0x200;
+	// "quiet" value, used to optimize when we can skip doing work
+	static constexpr uint32_t EG_QUIET = 0x380;
 
 public:
 	// constructor
@@ -206,6 +208,7 @@ public:
 	// simple getters for debugging
 	envelope_state debug_eg_state() const { return m_env_state; }
 	uint16_t debug_eg_attenuation() const { return m_env_attenuation; }
+	uint8_t debug_ssg_inverted() const { return m_ssg_inverted; }
 	opdata_cache &debug_cache() { return m_cache; }
 
 private:
@@ -302,6 +305,8 @@ public:
 	// simple getters for debugging
 	fm_operator<RegisterType> *debug_operator(uint32_t index) const { return m_op[index]; }
   int32_t debug_output(uint32_t index) const { return m_output[index]; }
+  int32_t debug_special1() const { return m_special1; }
+  int32_t debug_special2() const { return m_special2; }
 
 private:
 	// helper to add values to the outputs based on channel enables
@@ -340,6 +345,8 @@ private:
 	RegisterType &m_regs;                  // direct reference to registers
 	fm_engine_base<RegisterType> &m_owner; // reference to the owning engine
   mutable int32_t m_output[4];
+  mutable int32_t m_special1;
+  mutable int32_t m_special2;
 };
 
 
@@ -406,7 +413,14 @@ public:
 	void set_clock_prescale(uint32_t prescale) { m_clock_prescale = prescale; }
 
 	// compute sample rate
-	uint32_t sample_rate(uint32_t baseclock) const { return baseclock / (m_clock_prescale * OPERATORS); }
+	uint32_t sample_rate(uint32_t baseclock) const
+	{
+#if (YMFM_DEBUG_LOG_WAVFILES)
+		for (uint32_t chnum = 0; chnum < CHANNELS; chnum++)
+			m_wavfile[chnum].set_samplerate(baseclock / (m_clock_prescale * OPERATORS));
+#endif
+		return baseclock / (m_clock_prescale * OPERATORS);
+	}
 
 	// return the owning device
 	ymfm_interface &intf() const { return m_intf; }
@@ -445,7 +459,7 @@ protected:
 	uint8_t m_clock_prescale;        // prescale factor (2/3/6)
 	uint8_t m_irq_mask;              // mask of which bits signal IRQs
 	uint8_t m_irq_state;             // current IRQ state
-	uint8_t m_timer_running[2];      // current timer running state
+	uint8_t m_timer_running[4];      // current timer running state
 	uint8_t m_total_clocks;          // low 8 bits of the total number of clocks processed
 	uint32_t m_active_channels;      // mask of active channels (computed by prepare)
 	uint32_t m_modified_channels;    // mask of channels that have been modified
@@ -453,6 +467,9 @@ protected:
 	RegisterType m_regs;             // register accessor
 	std::unique_ptr<fm_channel<RegisterType>> m_channel[CHANNELS]; // channel pointers
 	std::unique_ptr<fm_operator<RegisterType>> m_operator[OPERATORS]; // operator pointers
+#if (YMFM_DEBUG_LOG_WAVFILES)
+	mutable ymfm_wavfile<1> m_wavfile[CHANNELS]; // for debugging
+#endif
 };
 
 }

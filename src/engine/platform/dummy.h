@@ -1,6 +1,6 @@
 /**
  * Furnace Tracker - multi-system chiptune tracker
- * Copyright (C) 2021-2022 tildearrow and contributors
+ * Copyright (C) 2021-2024 tildearrow and contributors
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -33,17 +33,19 @@ class DivPlatformDummy: public DivDispatch {
   Channel chan[128];
   DivDispatchOscBuffer* oscBuf[128];
   bool isMuted[128];
-  unsigned char chans;
+  unsigned char chans;  
+  friend void putDispatchChip(void*,int);
   friend void putDispatchChan(void*,int,int);
   public:
-    void acquire(short* bufL, short* bufR, size_t start, size_t len);
+    void acquire(short** buf, size_t len);
     void muteChannel(int ch, bool mute);
     int dispatch(DivCommand c);
+    void notifyInsDeletion(void* ins);
     void* getChanState(int chan);
     DivDispatchOscBuffer* getOscBuffer(int chan);
     void reset();
     void tick(bool sysTick=true);
-    int init(DivEngine* parent, int channels, int sugRate, unsigned int flags);
+    int init(DivEngine* parent, int channels, int sugRate, const DivConfig& flags);
     void quit();
     ~DivPlatformDummy();
 };

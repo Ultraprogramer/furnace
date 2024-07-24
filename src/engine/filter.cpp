@@ -1,6 +1,6 @@
 /**
  * Furnace Tracker - multi-system chiptune tracker
- * Copyright (C) 2021-2022 tildearrow and contributors
+ * Copyright (C) 2021-2024 tildearrow and contributors
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -24,7 +24,9 @@
 
 float* DivFilterTables::cubicTable=NULL;
 float* DivFilterTables::sincTable=NULL;
+float* DivFilterTables::sincTable8=NULL;
 float* DivFilterTables::sincIntegralTable=NULL;
+float* DivFilterTables::sincIntegralSmallTable=NULL;
 
 // portions from Schism Tracker (scripts/lutgen.c)
 // licensed under same license as this program.
@@ -44,7 +46,7 @@ float* DivFilterTables::getCubicTable() {
   return cubicTable;
 }
 
-float* DivFilterTables:: getSincTable() {
+float* DivFilterTables::getSincTable() {
   if (sincTable==NULL) {
     logD("initializing sinc table.");
     sincTable=new float[65536];
@@ -62,6 +64,26 @@ float* DivFilterTables:: getSincTable() {
     }
   }
   return sincTable;
+}
+
+float* DivFilterTables::getSincTable8() {
+  if (sincTable8==NULL) {
+    logD("initializing sinc table (8).");
+    sincTable8=new float[32768];
+
+    sincTable8[0]=1.0f;
+    for (int i=1; i<32768; i++) {
+      int mapped=((i&8191)<<2)|(i>>13);
+      double x=(double)i*M_PI/8192.0;
+      sincTable8[mapped]=sin(x)/x;
+    }
+
+    for (int i=0; i<32768; i++) {
+      int mapped=((i&8191)<<2)|(i>>13);
+      sincTable8[mapped]*=pow(cos(M_PI*(double)i/65536.0),2.0);
+    }
+  }
+  return sincTable8;
 }
 
 float* DivFilterTables::getSincIntegralTable() {
@@ -84,4 +106,26 @@ float* DivFilterTables::getSincIntegralTable() {
     }
   }
   return sincIntegralTable;
+}
+
+float* DivFilterTables::getSincIntegralSmallTable() {
+  if (sincIntegralSmallTable==NULL) {
+    logD("initializing small sinc integral table.");
+    sincIntegralSmallTable=new float[512];
+
+    sincIntegralSmallTable[0]=-0.5f;
+    for (int i=1; i<512; i++) {
+      int mapped=((i&63)<<3)|(i>>6);
+      int mappedPrev=(((i-1)&63)<<3)|((i-1)>>6);
+      double x=(double)i*M_PI/64.0;
+      double sinc=sin(x)/x;
+      sincIntegralSmallTable[mapped]=sincIntegralSmallTable[mappedPrev]+(sinc/64.0);
+    }
+
+    for (int i=0; i<512; i++) {
+      int mapped=((i&63)<<3)|(i>>6);
+      sincIntegralSmallTable[mapped]*=pow(cos(M_PI*(double)i/1024.0),2.0);
+    }
+  }
+  return sincIntegralSmallTable;
 }

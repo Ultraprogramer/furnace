@@ -1,6 +1,6 @@
 /**
  * Furnace Tracker - multi-system chiptune tracker
- * Copyright (C) 2021-2022 tildearrow and contributors
+ * Copyright (C) 2021-2024 tildearrow and contributors
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -22,11 +22,12 @@
 
 #include <stdlib.h>
 #include <string.h>
-#include <vector>
+#include "../pch.h"
+#include "config.h"
+#include "chipUtils.h"
+#include "defines.h"
 
 #define ONE_SEMITONE 2200
-
-#define DIV_NOTE_NULL 0x7fffffff
 
 #define addWrite(a,v) regWrites.push_back(DivRegWrite(a,v));
 
@@ -46,7 +47,9 @@ enum DivDispatchCmds {
   DIV_CMD_ENV_RELEASE,
   DIV_CMD_INSTRUMENT, // (ins, force)
   DIV_CMD_VOLUME, // (vol)
+  // TODO: think of possibly moving this
   DIV_CMD_GET_VOLUME, // () -> vol
+  // TODO: move. shouldn't be a command.
   DIV_CMD_GET_VOLMAX, // () -> volMax
   DIV_CMD_NOTE_PORTA, // (target, speed) -> 2 if target reached
   DIV_CMD_PITCH, // (pitch)
@@ -101,9 +104,8 @@ enum DivDispatchCmds {
   DIV_CMD_FM_AM_DEPTH, // (depth)
   DIV_CMD_FM_PM_DEPTH, // (depth)
 
-  DIV_CMD_GENESIS_LFO, // unused?
-  
-  DIV_CMD_ARCADE_LFO, // unused?
+  DIV_CMD_FM_LFO2, // (speed)
+  DIV_CMD_FM_LFO2_WAVE, // (waveform)
 
   DIV_CMD_STD_NOISE_FREQ, // (freq)
   DIV_CMD_STD_NOISE_MODE, // (mode)
@@ -165,22 +167,23 @@ enum DivDispatchCmds {
   DIV_CMD_X1_010_ENVELOPE_PERIOD,
   DIV_CMD_X1_010_ENVELOPE_SLIDE,
   DIV_CMD_X1_010_AUTO_ENVELOPE,
+  DIV_CMD_X1_010_SAMPLE_BANK_SLOT,
 
   DIV_CMD_WS_SWEEP_TIME,
   DIV_CMD_WS_SWEEP_AMOUNT,
 
   DIV_CMD_N163_WAVE_POSITION,
   DIV_CMD_N163_WAVE_LENGTH,
-  DIV_CMD_N163_WAVE_MODE,
-  DIV_CMD_N163_WAVE_LOAD,
+  DIV_CMD_N163_WAVE_UNUSED1,
+  DIV_CMD_N163_WAVE_UNUSED2,
   DIV_CMD_N163_WAVE_LOADPOS,
   DIV_CMD_N163_WAVE_LOADLEN,
-  DIV_CMD_N163_WAVE_LOADMODE,
+  DIV_CMD_N163_WAVE_UNUSED3,
   DIV_CMD_N163_CHANNEL_LIMIT,
   DIV_CMD_N163_GLOBAL_WAVE_LOAD,
   DIV_CMD_N163_GLOBAL_WAVE_LOADPOS,
-  DIV_CMD_N163_GLOBAL_WAVE_LOADLEN,
-  DIV_CMD_N163_GLOBAL_WAVE_LOADMODE,
+  DIV_CMD_N163_UNUSED4,
+  DIV_CMD_N163_UNUSED5,
 
   DIV_CMD_SU_SWEEP_PERIOD_LOW, // (which, val)
   DIV_CMD_SU_SWEEP_PERIOD_HIGH, // (which, val)
@@ -189,7 +192,76 @@ enum DivDispatchCmds {
   DIV_CMD_SU_SYNC_PERIOD_LOW,
   DIV_CMD_SU_SYNC_PERIOD_HIGH,
 
-  DIV_ALWAYS_SET_VOLUME, // () -> alwaysSetVol
+  DIV_CMD_ADPCMA_GLOBAL_VOLUME,
+
+  DIV_CMD_SNES_ECHO,
+  DIV_CMD_SNES_PITCH_MOD,
+  DIV_CMD_SNES_INVERT,
+  DIV_CMD_SNES_GAIN_MODE,
+  DIV_CMD_SNES_GAIN,
+  DIV_CMD_SNES_ECHO_ENABLE,
+  DIV_CMD_SNES_ECHO_DELAY,
+  DIV_CMD_SNES_ECHO_VOL_LEFT,
+  DIV_CMD_SNES_ECHO_VOL_RIGHT,
+  DIV_CMD_SNES_ECHO_FEEDBACK,
+  DIV_CMD_SNES_ECHO_FIR,
+
+  DIV_CMD_NES_ENV_MODE,
+  DIV_CMD_NES_LENGTH,
+  DIV_CMD_NES_COUNT_MODE,
+
+  DIV_CMD_MACRO_OFF, // (which)
+  DIV_CMD_MACRO_ON, // (which)
+
+  DIV_CMD_SURROUND_PANNING, // (out, val)
+
+  DIV_CMD_FM_AM2_DEPTH, // (depth)
+  DIV_CMD_FM_PM2_DEPTH, // (depth)
+
+  DIV_CMD_ES5506_FILTER_MODE, // (value)
+  DIV_CMD_ES5506_FILTER_K1, // (value, mask)
+  DIV_CMD_ES5506_FILTER_K2, // (value, mask)
+  DIV_CMD_ES5506_FILTER_K1_SLIDE, // (value, negative)
+  DIV_CMD_ES5506_FILTER_K2_SLIDE, // (value, negative)
+  DIV_CMD_ES5506_ENVELOPE_COUNT, // (count)
+  DIV_CMD_ES5506_ENVELOPE_LVRAMP, // (ramp)
+  DIV_CMD_ES5506_ENVELOPE_RVRAMP, // (ramp)
+  DIV_CMD_ES5506_ENVELOPE_K1RAMP, // (ramp, slowdown)
+  DIV_CMD_ES5506_ENVELOPE_K2RAMP, // (ramp, slowdown)
+  DIV_CMD_ES5506_PAUSE, // (value)
+
+  DIV_CMD_HINT_ARP_TIME, // (value)
+
+  DIV_CMD_SNES_GLOBAL_VOL_LEFT,
+  DIV_CMD_SNES_GLOBAL_VOL_RIGHT,
+
+  DIV_CMD_NES_LINEAR_LENGTH,
+
+  DIV_CMD_EXTERNAL, // (value)
+
+  DIV_CMD_C64_AD, // (value)
+  DIV_CMD_C64_SR, // (value)
+
+  DIV_CMD_ESFM_OP_PANNING, // (op, value)
+  DIV_CMD_ESFM_OUTLVL, // (op, value)
+  DIV_CMD_ESFM_MODIN, // (op, value)
+  DIV_CMD_ESFM_ENV_DELAY, // (op, value)
+
+  DIV_CMD_MACRO_RESTART, // (which)
+
+  DIV_CMD_POWERNOISE_COUNTER_LOAD, // (which, val)
+  DIV_CMD_POWERNOISE_IO_WRITE, // (port, value)
+  
+  DIV_CMD_DAVE_HIGH_PASS,
+  DIV_CMD_DAVE_RING_MOD,
+  DIV_CMD_DAVE_SWAP_COUNTERS,
+  DIV_CMD_DAVE_LOW_PASS,
+  DIV_CMD_DAVE_CLOCK_DIV,
+
+  DIV_CMD_MINMOD_ECHO,
+
+  DIV_CMD_BIFURCATOR_STATE_LOAD,
+  DIV_CMD_BIFURCATOR_PARAMETER,
 
   DIV_CMD_MAX
 };
@@ -218,6 +290,29 @@ struct DivCommand {
     value2(0) {}
 };
 
+struct DivPitchTable {
+  int pitch[(12*128)+1];
+  unsigned char linearity, blockBits;
+  bool period;
+
+  // get pitch
+  int get(int base, int pitch, int pitch2);
+
+  // linear: note
+  // non-linear: get(note,0,0)
+  int getBase(int note);
+
+  // calculate pitch table
+  void init(float tuning, double clock, double divider, int octave, unsigned char linear, bool isPeriod, unsigned char block=0);
+
+  DivPitchTable():
+    linearity(2),
+    blockBits(0),
+    period(false) {
+    memset(pitch,0,sizeof(pitch));
+  }
+};
+
 struct DivDelayedCommand {
   int ticks;
   DivCommand cmd;
@@ -237,12 +332,39 @@ struct DivRegWrite {
    *   - xx is the instance ID
    * - 0xffffxx03: set sample playback direction
    *   - x is the instance ID
+   * - 0xffffxx04: switch sample bank
+   *   - for use in VGM export
+   * - 0xffffxx05: set sample position
+   *   - xx is the instance ID
+   *   - data is the sample position
    * - 0xffffffff: reset
    */
   unsigned int addr;
-  unsigned short val;
-  DivRegWrite(unsigned int a, unsigned short v):
+  unsigned int val;
+  DivRegWrite():
+    addr(0), val(0) {}
+  DivRegWrite(unsigned int a, unsigned int v):
     addr(a), val(v) {}
+};
+
+struct DivDelayedWrite {
+  int time;
+  DivRegWrite write;
+  DivDelayedWrite(int t, unsigned int a, unsigned int v):
+    time(t),
+    write(a,v) {}
+};
+
+struct DivSamplePos {
+  int sample, pos, freq;
+  DivSamplePos(int s, int p, int f):
+    sample(s),
+    pos(p),
+    freq(f) {}
+  DivSamplePos():
+    sample(-1),
+    pos(0),
+    freq(0) {}
 };
 
 struct DivDispatchOscBuffer {
@@ -261,6 +383,120 @@ struct DivDispatchOscBuffer {
     followNeedle(0) {
     memset(data,0,65536*sizeof(short));
   }
+};
+
+struct DivChannelPair {
+  const char* label;
+  // -1: none
+  signed char pairs[8];
+
+  DivChannelPair(const char* l, signed char p0, signed char p1, signed char p2, signed char p3, signed char p4, signed char p5, signed char p6, signed char p7):
+    label(l),
+    pairs{p0,p1,p2,p3,p4,p5,p6,p7} {}
+  DivChannelPair(const char* l, signed char p):
+    label(l),
+    pairs{p,-1,-1,-1,-1,-1,-1,-1} {}
+  DivChannelPair():
+    label(NULL),
+    pairs{-1,-1,-1,-1,-1,-1,-1,-1} {}
+};
+
+struct DivChannelModeHints {
+  const char* hint[4];
+  // valid types:
+  // - 0: disabled
+  // - 1: volume
+  // - 2: pitch
+  // - 3: panning
+  // - 4: chip primary
+  // - 5: chip secondary
+  // - 6: mixing
+  // - 7: DSP
+  // - 8: note
+  // - 9: misc 1
+  // - 10: misc 2
+  // - 11: misc 3
+  // - 12: attack
+  // - 13: decay
+  // - 14: sustain
+  // - 15: release
+  // - 16: dec linear
+  // - 17: dec exp
+  // - 18: inc linear
+  // - 19: inc bent
+  // - 20: direct
+  unsigned char type[4];
+  // up to 4
+  unsigned char count;
+
+  DivChannelModeHints():
+    hint{NULL,NULL,NULL,NULL},
+    type{0,0,0,0},
+    count(0) {}
+};
+
+enum DivMemoryEntryType {
+  DIV_MEMORY_FREE=0, // shouldn't be used
+  DIV_MEMORY_PADDING,
+  DIV_MEMORY_RESERVED,
+  DIV_MEMORY_SAMPLE,
+  DIV_MEMORY_SAMPLE_ALT1,
+  DIV_MEMORY_SAMPLE_ALT2,
+  DIV_MEMORY_SAMPLE_ALT3,
+  DIV_MEMORY_WAVE_RAM,
+  DIV_MEMORY_WAVE_STATIC,
+  DIV_MEMORY_ECHO,
+  DIV_MEMORY_N163_LOAD,
+  DIV_MEMORY_N163_PLAY,
+  DIV_MEMORY_BANK0,
+  DIV_MEMORY_BANK1,
+  DIV_MEMORY_BANK2,
+  DIV_MEMORY_BANK3,
+  DIV_MEMORY_BANK4,
+  DIV_MEMORY_BANK5,
+  DIV_MEMORY_BANK6,
+  DIV_MEMORY_BANK7,
+};
+
+struct DivMemoryEntry {
+  DivMemoryEntryType type;
+  String name;
+  int asset;
+  size_t begin, end;
+  DivMemoryEntry(DivMemoryEntryType t, String n, int a, size_t b, size_t e):
+    type(t),
+    name(n),
+    asset(a),
+    begin(b),
+    end(e) {}
+  DivMemoryEntry():
+    type(DIV_MEMORY_FREE),
+    name(""),
+    asset(-1),
+    begin(0),
+    end(0) {}
+};
+
+enum DivMemoryWaveView: unsigned char {
+  DIV_MEMORY_WAVE_NONE=0,
+  DIV_MEMORY_WAVE_4BIT, // Namco 163
+  DIV_MEMORY_WAVE_6BIT, // Virtual Boy
+  DIV_MEMORY_WAVE_8BIT_SIGNED, // SCC
+};
+
+struct DivMemoryComposition {
+  std::vector<DivMemoryEntry> entries;
+  String name;
+  size_t capacity;
+  size_t used;
+  const unsigned char* memory;
+  DivMemoryWaveView waveformView;
+  DivMemoryComposition():
+    name(""),
+    capacity(0),
+    used(0),
+    memory(NULL),
+    waveformView(DIV_MEMORY_WAVE_NONE) {}
 };
 
 class DivEngine;
@@ -290,12 +526,18 @@ class DivDispatch {
 
     /**
      * fill a buffer with sound data.
-     * @param bufL the left or mono channel buffer.
-     * @param bufR the right channel buffer.
-     * @param start the start offset.
+     * @param buf pointers to output buffers.
      * @param len the amount of samples to fill.
      */
-    virtual void acquire(short* bufL, short* bufR, size_t start, size_t len);
+    virtual void acquire(short** buf, size_t len);
+
+    /**
+     * fill a write stream with data (e.g. for software-mixed PCM).
+     * @param stream the write stream.
+     * @param rate stream rate (e.g. 44100 for VGM).
+     * @param len number of samples.
+     */
+    virtual void fillStream(std::vector<DivDelayedWrite>& stream, int sRate, size_t len);
 
     /**
      * send a command to this dispatch.
@@ -317,18 +559,51 @@ class DivDispatch {
 
     /**
      * get the state of a channel.
+     * @param chan the channel.
      * @return a pointer, or NULL.
      */
     virtual void* getChanState(int chan);
 
     /**
-     * get the DivMacroInt of a chanmel.
+     * get the DivMacroInt of a channel.
+     * @param chan the channel.
      * @return a pointer, or NULL.
      */
     virtual DivMacroInt* getChanMacroInt(int chan);
 
     /**
+     * get the stereo panning of a channel.
+     * @param chan the channel.
+     * @return a 16-bit number. left in top 8 bits and right in bottom 8 bits.
+     */
+    virtual unsigned short getPan(int chan);
+
+    /**
+     * get "paired" channels.
+     * @param chan the channel to query.
+     * @return a DivChannelPair.
+     */
+    virtual DivChannelPair getPaired(int chan);
+
+    /**
+     * get channel mode hints.
+     * @param chan the channel to query.
+     * @return a DivChannelModeHints.
+     */
+    virtual DivChannelModeHints getModeHints(int chan);
+    
+
+    /**
+     * get currently playing sample (and its position).
+     * @param chan the channel.
+     * @return a DivSamplePos. if sample is -1 then nothing is playing or the
+     * channel doesn't play samples.
+     */
+    virtual DivSamplePos getSamplePos(int chan);
+
+    /**
      * get an oscilloscope buffer for a channel.
+     * @param chan the channel.
      * @return a pointer to a DivDispatchOscBuffer, or NULL if not supported.
      */
     virtual DivDispatchOscBuffer* getOscBuffer(int chan);
@@ -373,10 +648,10 @@ class DivDispatch {
     virtual void muteChannel(int ch, bool mute);
 
     /**
-     * test whether this dispatch outputs audio in two channels.
-     * @return whether it does.
+     * get the number of outputs this dispatch provides.
+     * @return number of outputs (usually 1 or 2 but may be more). SHALL NOT be less than one.
      */
-    virtual bool isStereo();
+    virtual int getOutputCount();
 
     /**
      * test whether sending a key off command to a channel should reset arp too.
@@ -393,11 +668,40 @@ class DivDispatch {
     virtual bool keyOffAffectsPorta(int ch);
 
     /**
+     * test whether volume is global.
+     * @return whether it is.
+     */
+    virtual bool isVolGlobal();
+
+    /**
+     * map MIDI velocity (from 0 to 127) to chip volume.
+     * @param ch the chip channel. -1 means N/A.
+     * @param vel input velocity, from 0.0 to 1.0.
+     * @return output volume.
+     */
+    virtual int mapVelocity(int ch, float vel);
+
+    /**
+     * map chip volume to gain.
+     * @param ch the chip channel. -1 means N/A.
+     * @param vol input volume.
+     * @return output gain fron 0.0 to 1.0.
+     */
+    virtual float getGain(int ch, int vol);
+
+    /**
      * get the lowest note in a portamento.
      * @param ch the channel in question.
      * @return the lowest note.
      */
     virtual int getPortaFloor(int ch);
+
+    /**
+     * check whether to always set volume on volume change (even when same volume).
+     * only for compatibility purposes!
+     * @return truth.
+     */
+    virtual bool getLegacyAlwaysSetVolume();
 
     /**
      * get the required amplification level of this dispatch's output.
@@ -418,10 +722,22 @@ class DivDispatch {
     virtual bool getWantPreNote();
 
     /**
-     * set the chip flags.
-     * @param flags the flags. see song.h for possible values.
+     * get minimum chip clock.
+     * @return clock in Hz, or 0 if custom clocks are not supported.
      */
-    virtual void setFlags(unsigned int flags);
+    virtual int getClockRangeMin();
+
+    /**
+     * get maximum chip clock.
+     * @return clock in Hz, or 0 if custom clocks are not supported.
+     */
+    virtual int getClockRangeMax();
+
+    /**
+     * set the chip flags.
+     * @param flags a DivConfig containing chip flags.
+     */
+    virtual void setFlags(const DivConfig& flags);
 
     /**
      * set skip reg writes.
@@ -484,33 +800,67 @@ class DivDispatch {
 
     /**
      * Get sample memory buffer.
+     * @param index the memory index.
+     * @return a pointer to sample memory, or NULL.
      */
     virtual const void* getSampleMem(int index = 0);
 
     /**
      * Get sample memory capacity.
+     * @param index the memory index.
+     * @return memory capacity in bytes, or 0 if memory doesn't exist.
      */
     virtual size_t getSampleMemCapacity(int index = 0);
 
     /**
+     * get sample memory name.
+     * @param index the memory index.
+     * @return a name, or NULL if it doesn't have any name in particular.
+     */
+    virtual const char* getSampleMemName(int index=0);
+
+    /**
      * Get sample memory usage.
+     * @param index the memory index.
+     * @return memory usage in bytes.
      */
     virtual size_t getSampleMemUsage(int index = 0);
 
     /**
-     * Render samples into sample memory.
+     * check whether sample has been loaded in memory.
+     * @param index index.
+     * @param sample the sample in question.
+     * @return whether it did.
      */
-    virtual void renderSamples();
+    virtual bool isSampleLoaded(int index, int sample);
+    
+    /**
+     * get memory composition.
+     * @param index the memory index.
+     * @return a pointer to DivMemoryComposition, or NULL.
+     */
+    virtual const DivMemoryComposition* getMemCompo(int index);
+
+    /**
+     * Render samples into sample memory.
+     * @param sysID the chip's index in the chip list.
+     */
+    virtual void renderSamples(int sysID);
+
+    /**
+     * tell this DivDispatch that the tuning and/or pitch linearity has changed, and therefore the pitch table must be regenerated.
+     */
+    virtual void notifyPitchTable();
 
     /**
      * initialize this DivDispatch.
      * @param parent the parent DivEngine.
      * @param channels the number of channels to acquire.
      * @param sugRate the suggested rate. this may change, so don't rely on it.
-     * @param flags the chip flags. see song.h for possible values.
+     * @param flags a DivConfig containing chip flags.
      * @return the number of channels allocated.
      */
-    virtual int init(DivEngine* parent, int channels, int sugRate, unsigned int flags);
+    virtual int init(DivEngine* parent, int channels, int sugRate, const DivConfig& flags);
 
     /**
      * quit the DivDispatch.
@@ -520,6 +870,15 @@ class DivDispatch {
     virtual ~DivDispatch();
 };
 
+// custom chip clock helper define. put in setFlags, but before rate is set.
+#define CHECK_CUSTOM_CLOCK \
+  if (flags.getInt("customClock",0)>0) { \
+    chipClock=flags.getInt("customClock",getClockRangeMin()); \
+    if (chipClock>getClockRangeMax()) chipClock=getClockRangeMax(); \
+    if (chipClock<getClockRangeMin()) chipClock=getClockRangeMin(); \
+  }
+
+// NOTE: these definitions may be deprecated in the future. see DivPitchTable.
 // pitch calculation:
 // - a DivDispatch usually contains four variables per channel:
 //   - baseFreq: this changes on new notes, legato, arpeggio and slides.
@@ -536,9 +895,10 @@ class DivDispatch {
 #define NOTE_FNUM_BLOCK(x,bits) parent->calcBaseFreqFNumBlock(chipClock,CHIP_FREQBASE,x,bits)
 
 // this is for volume scaling calculation.
-#define VOL_SCALE_LINEAR_BROKEN(x,y,range) ((parent->song.newVolumeScaling)?(((x)*(y))/(range)):(CLAMP(((x)+(y))-(range),0,(range))))
-#define VOL_SCALE_LINEAR(x,y,range) (((x)*(y))/(range))
-#define VOL_SCALE_LOG(x,y,range) ((parent->song.newVolumeScaling)?(CLAMP(((x)+(y))-(range),0,(range))):(((x)*(y))/(range)))
+#define VOL_SCALE_LINEAR(x,y,range) ((parent->song.ceilVolumeScaling)?((((x)*(y))+(range-1))/(range)):(((x)*(y))/(range)))
+#define VOL_SCALE_LOG(x,y,range) (CLAMP(((x)+(y))-(range),0,(range)))
+#define VOL_SCALE_LINEAR_BROKEN(x,y,range) ((parent->song.newVolumeScaling)?(VOL_SCALE_LINEAR(x,y,range)):(VOL_SCALE_LOG(x,y,range)))
+#define VOL_SCALE_LOG_BROKEN(x,y,range) ((parent->song.newVolumeScaling)?(VOL_SCALE_LOG(x,y,range)):(VOL_SCALE_LINEAR(x,y,range)))
 
 // these are here for convenience.
 // it is encouraged to use these, since you get an exact value this way.
@@ -548,7 +908,10 @@ class DivDispatch {
 #define COLOR_PAL (283.75*15625.0+25.0)
 
 #define CLAMP_VAR(x,xMin,xMax) \
-  if (x<xMin) x=xMin; \
-  if (x>xMax) x=xMax;
+  if ((x)<(xMin)) (x)=(xMin); \
+  if ((x)>(xMax)) (x)=(xMax);
+
+#define NEW_ARP_STRAT (parent->song.linearPitch==2 && !parent->song.oldArpStrategy)
+#define HACKY_LEGATO_MESS chan[c.chan].std.arp.will && !chan[c.chan].std.arp.mode && !NEW_ARP_STRAT
 
 #endif

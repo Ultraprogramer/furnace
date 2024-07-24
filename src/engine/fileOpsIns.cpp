@@ -1,6 +1,6 @@
 /**
  * Furnace Tracker - multi-system chiptune tracker
- * Copyright (C) 2021-2022 tildearrow and contributors
+ * Copyright (C) 2021-2024 tildearrow and contributors
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -147,7 +147,7 @@ void DivEngine::loadDMP(SafeReader& reader, std::vector<DivInstrument*>& ret, St
           logD("instrument type is C64");
           break;
         case 8: // Arcade
-          ins->type=DIV_INS_FM;
+          ins->type=DIV_INS_OPM;
           logD("instrument type is Arcade");
           break;
         case 9: // Neo Geo
@@ -187,6 +187,8 @@ void DivEngine::loadDMP(SafeReader& reader, std::vector<DivInstrument*>& ret, St
           ins->type=DIV_INS_OPLL;
         } else if (sys==1) {
           ins->type=DIV_INS_OPL;
+        } else if (sys==8) {
+          ins->type=DIV_INS_OPM;
         } else {
           ins->type=DIV_INS_FM;
         }
@@ -333,6 +335,10 @@ void DivEngine::loadDMP(SafeReader& reader, std::vector<DivInstrument*>& ret, St
       if (version>5) {
         for (int i=0; i<ins->std.waveMacro.len; i++) {
           ins->std.waveMacro.val[i]=reader.readI();
+          // piece of crap offset by 1
+          if (ins->type==DIV_INS_AY) {
+            ins->std.waveMacro.val[i]++;
+          }
         }
       } else {
         for (int i=0; i<ins->std.waveMacro.len; i++) {
@@ -347,6 +353,8 @@ void DivEngine::loadDMP(SafeReader& reader, std::vector<DivInstrument*>& ret, St
       }
 
       if (ins->type==DIV_INS_C64) {
+        bool volIsCutoff=false;
+
         ins->c64.triOn=reader.readC();
         ins->c64.sawOn=reader.readC();
         ins->c64.pulseOn=reader.readC();
@@ -363,9 +371,9 @@ void DivEngine::loadDMP(SafeReader& reader, std::vector<DivInstrument*>& ret, St
         ins->c64.oscSync=reader.readC();
         ins->c64.toFilter=reader.readC();
         if (version<0x07) { // TODO: UNSURE
-          ins->c64.volIsCutoff=reader.readI();
+          volIsCutoff=reader.readI();
         } else {
-          ins->c64.volIsCutoff=reader.readC();
+          volIsCutoff=reader.readC();
         }
         ins->c64.initFilter=reader.readC();
 
@@ -377,10 +385,16 @@ void DivEngine::loadDMP(SafeReader& reader, std::vector<DivInstrument*>& ret, St
         ins->c64.ch3off=reader.readC();
 
         // weird storage
-        if (ins->c64.volIsCutoff) {
-          for (int j=0; j<ins->std.volMacro.len; j++) {
-            ins->std.volMacro.val[j]-=18;
+        if (volIsCutoff) {
+          // move to alg (new cutoff)
+          ins->std.algMacro.len=ins->std.volMacro.len;
+          ins->std.algMacro.loop=ins->std.volMacro.loop;
+          ins->std.algMacro.rel=ins->std.volMacro.rel;
+          for (int j=0; j<ins->std.algMacro.len; j++) {
+            ins->std.algMacro.val[j]=-(ins->std.volMacro.val[j]-18);
           }
+          ins->std.volMacro.len=0;
+          memset(ins->std.volMacro.val,0,256*sizeof(int));
         }
         for (int j=0; j<ins->std.dutyMacro.len; j++) {
           ins->std.dutyMacro.val[j]-=12;
@@ -1341,7 +1355,7 @@ void DivEngine::loadOPM(SafeReader& reader, std::vector<DivInstrument*>& ret, St
       // At this point we know any other line would be associated with patch params
       if (newPatch == NULL) {
         newPatch = new DivInstrument;
-        newPatch->type = DIV_INS_FM;
+        newPatch->type = DIV_INS_OPM;
         newPatch->fm.ops = 4;
       }
 
@@ -1814,7 +1828,7 @@ void DivEngine::loadWOPN(SafeReader& reader, std::vector<DivInstrument*>& ret, S
   }
 }
 
-std::vector<DivInstrument*> DivEngine::instrumentFromFile(const char* path) {
+std::vector<DivInstrument*> DivEngine::instrumentFromFile(const char* path, bool loadAssets, bool readInsName) {
   std::vector<DivInstrument*> ret;
   warnings="";
 
@@ -1880,10 +1894,19 @@ std::vector<DivInstrument*> DivEngine::instrumentFromFile(const char* path) {
 
   unsigned char magic[16];
   bool isFurnaceInstr=false;
+  bool isOldFurnaceIns=false;
   try {
-    reader.read(magic,16);
-    if (memcmp("-Furnace instr.-",magic,16)==0) {
+    reader.read(magic,4);
+    if (memcmp("FINS",magic,4)==0 || memcmp("FINB",magic,4)==0) {
       isFurnaceInstr=true;
+      logV("found a new Furnace ins");
+    } else {
+      reader.read(&magic[4],12);
+      if (memcmp("-Furnace instr.-",magic,16)==0) {
+        logV("found an old Furnace ins");
+        isFurnaceInstr=true;
+        isOldFurnaceIns=true;
+      }
     }
   } catch (EndOfFileException& e) {
     reader.seek(0,SEEK_SET);
@@ -1892,22 +1915,35 @@ std::vector<DivInstrument*> DivEngine::instrumentFromFile(const char* path) {
   if (isFurnaceInstr) {
     DivInstrument* ins=new DivInstrument;
     try {
-      short version=reader.readS();
-      reader.readS(); // reserved
+      short version=0;
+      if (isOldFurnaceIns) {
+        version=reader.readS();
+        reader.readS(); // reserved
+      } else {
+        version=reader.readS();
+        reader.seek(0,SEEK_SET);
+      }
 
       if (version>DIV_ENGINE_VERSION) {
         warnings="this instrument is made with a more recent version of Furnace!";
       }
 
-      unsigned int dataPtr=reader.readI();
-      reader.seek(dataPtr,SEEK_SET);
+      if (isOldFurnaceIns) {
+        unsigned int dataPtr=reader.readI();
+        reader.seek(dataPtr,SEEK_SET);
+      }
 
-      if (ins->readInsData(reader,version)!=DIV_DATA_SUCCESS) {
+      ins->name=stripPath;
+
+      if (ins->readInsData(reader,version,loadAssets?(&song):NULL)!=DIV_DATA_SUCCESS) {
         lastError="invalid instrument header/data!";
         delete ins;
         delete[] buf;
         return ret;
       } else {
+        if (!readInsName) {
+          ins->name=stripPath;
+        }
         ret.push_back(ins);
       }
     } catch (EndOfFileException& e) {
@@ -1961,7 +1997,12 @@ std::vector<DivInstrument*> DivEngine::instrumentFromFile(const char* path) {
         format=DIV_INSFORMAT_WOPL;
       } else if (extS==".wopn") {
         format=DIV_INSFORMAT_WOPN;
-      } 
+      } else {
+        // unknown format
+        lastError="unknown instrument format";
+        delete[] buf;
+        return ret;
+      }
     }
 
     switch (format) {

@@ -1,6 +1,6 @@
 /**
  * Furnace Tracker - multi-system chiptune tracker
- * Copyright (C) 2021-2022 tildearrow and contributors
+ * Copyright (C) 2021-2024 tildearrow and contributors
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -23,21 +23,47 @@
 #include "IconsFontAwesome4.h"
 #include <SDL_timer.h>
 #include <fmt/printf.h>
-#include <imgui.h>
+#include "imgui.h"
+#include "imgui_internal.h"
+
+PendingDrawOsc _debugDo;
+static float oscDebugData[2048];
+static int oscDebugLen=800;
+static int oscDebugHeight=400;
+static float oscDebugLineSize=1.0;
+static float oscDebugMin=-1.0;
+static float oscDebugMax=1.0;
+static float oscDebugPower=1.0;
+static int oscDebugRepeat=1;
+static int numApples=1;
+
+static void _drawOsc(const ImDrawList* drawList, const ImDrawCmd* cmd) {
+  if (cmd!=NULL) {
+    if (cmd->UserCallbackData!=NULL) {
+      ((FurnaceGUI*)(((PendingDrawOsc*)cmd->UserCallbackData)->gui))->runPendingDrawOsc((PendingDrawOsc*)cmd->UserCallbackData);
+    }
+  }
+}
 
 void FurnaceGUI::drawDebug() {
   static int bpOrder;
   static int bpRow;
   static int bpTick;
   static bool bpOn;
+
+  static double ptcClock;
+  static double ptcDivider;
+  static int ptcOctave;
+  static int ptcMode;
+  static int ptcBlockBits;
   if (nextWindow==GUI_WINDOW_DEBUG) {
     debugOpen=true;
     ImGui::SetNextWindowFocus();
     nextWindow=GUI_WINDOW_NOTHING;
   }
   if (!debugOpen) return;
-  ImGui::SetNextWindowSizeConstraints(ImVec2(400.0f*dpiScale,200.0f*dpiScale),ImVec2(scrW*dpiScale,scrH*dpiScale));
-  if (ImGui::Begin("Debug",&debugOpen,globalWinFlags|ImGuiWindowFlags_NoDocking)) {
+  ImGui::SetNextWindowSizeConstraints(ImVec2(100.0f*dpiScale,100.0f*dpiScale),ImVec2(canvasW,canvasH));
+  if (ImGui::Begin("Debug",&debugOpen,globalWinFlags|ImGuiWindowFlags_NoDocking,_("Debug"))) {
     ImGui::Text("NOTE: use with caution.");
     if (ImGui::TreeNode("Debug Controls")) {
       if (e->isHalted()) {
@@ -52,6 +78,8 @@ void FurnaceGUI::drawDebug() {
       ImGui::SameLine();
       if (ImGui::Button("Pattern Advance")) e->haltWhen(DIV_HALT_PATTERN);
 
+      if (ImGui::Button("Play Command Stream")) nextWindow=GUI_WINDOW_CS_PLAYER;
+
       if (ImGui::Button("Panic")) e->syncReset();
       ImGui::SameLine();
       if (ImGui::Button("Abort")) {
@@ -64,6 +92,22 @@ void FurnaceGUI::drawDebug() {
       ImGui::InputInt("Row",&bpRow);
       ImGui::InputInt("Tick",&bpTick);
       ImGui::Checkbox("Enable",&bpOn);
+      ImGui::TreePop();
+    }
+    if (ImGui::TreeNode("Chip Status")) {
+      ImGui::Text("for best results set latency to minimum or use the Frame Advance button.");
+      ImGui::Columns(e->song.systemLen);
+      for (int i=0; i<e->song.systemLen; i++) {
+        void* ch=e->getDispatch(i);
+        ImGui::TextColored(uiColors[GUI_COLOR_ACCENT_PRIMARY],"Chip %d: %s",i,getSystemName(e->song.system[i]));
+        if (e->song.system[i]==DIV_SYSTEM_NULL) {
+          ImGui::Text("NULL");
+        } else {
+          putDispatchChip(ch,e->song.system[i]);
+        }
+        ImGui::NextColumn();
+      }
+      ImGui::Columns();
       ImGui::TreePop();
     }
     if (ImGui::TreeNode("Dispatch Status")) {
@@ -82,7 +126,7 @@ void FurnaceGUI::drawDebug() {
       ImGui::Columns();
       ImGui::TreePop();
     }
-    if (ImGui::TreeNode("Playback Status")) {
+    if (ImGui::TreeNode("Channel Status")) {
       ImGui::Text("for best results set latency to minimum or use the Frame Advance button.");
       ImGui::Columns(e->getTotalChannelCount());
       for (int i=0; i<e->getTotalChannelCount(); i++) {
@@ -111,7 +155,7 @@ void FurnaceGUI::drawDebug() {
           ImGui::Text("- depth = %d",ch->vibratoDepth);
           ImGui::Text("- rate = %d",ch->vibratoRate);
           ImGui::Text("- pos = %d",ch->vibratoPos);
-          ImGui::Text("- dir = %d",ch->vibratoDir);
+          ImGui::Text("- shape = %d",ch->vibratoShape);
           ImGui::Text("- fine = %d",ch->vibratoFine);
           ImGui::PopStyleColor();
           ImGui::PushStyleColor(ImGuiCol_Text,(ch->tremoloDepth>0)?uiColors[GUI_COLOR_MACRO_VOLUME]:uiColors[GUI_COLOR_TEXT]);
@@ -144,6 +188,11 @@ void FurnaceGUI::drawDebug() {
       ImGui::Columns();
       ImGui::TreePop();
     }
+    if (ImGui::TreeNode("Playback Status")) {
+      String pdi=e->getPlaybackDebugInfo();
+      ImGui::TextWrapped("%s",pdi.c_str());
+      ImGui::TreePop();
+    }
     if (ImGui::TreeNode("Sample Debug")) {
       for (int i=0; i<e->song.sampleLen; i++) {
         DivSample* sample=e->getSample(i);
@@ -156,13 +205,14 @@ void FurnaceGUI::drawDebug() {
           ImGui::Text("centerRate: %d",sample->centerRate);
           ImGui::Text("loopStart: %d",sample->loopStart);
           ImGui::Text("loopEnd: %d", sample->loopEnd);
-          ImGui::Text("loopOffP: %d",sample->loopOffP);
-          if (sampleDepths[sample->depth]!=NULL) {
-            ImGui::Text("depth: %d (%s)",(unsigned char)sample->depth,sampleDepths[sample->depth]);
+          ImGui::Text(sample->loop?"loop: Enabled":"loop: Disabled");
+          if (sampleLoopModes[sample->loopMode]!=NULL) {
+            ImGui::Text("loopMode: %d (%s)",(unsigned char)sample->loopMode,sampleLoopModes[sample->loopMode]);
           } else {
-            ImGui::Text("depth: %d (<NULL!>)",(unsigned char)sample->depth);
+            ImGui::Text("loopMode: %d (<NULL!>)",(unsigned char)sample->loopMode);
           }
 
+          ImGui::Text("depth: %d",(unsigned char)sample->depth);
           ImGui::Text("length8: %d",sample->length8);
           ImGui::Text("length16: %d",sample->length16);
           ImGui::Text("length1: %d",sample->length1);
@@ -174,23 +224,6 @@ void FurnaceGUI::drawDebug() {
           ImGui::Text("lengthBRR: %d",sample->lengthBRR);
           ImGui::Text("lengthVOX: %d",sample->lengthVOX);
 
-          ImGui::Text("off8: %x",sample->off8);
-          ImGui::Text("off16: %x",sample->off16);
-          ImGui::Text("off1: %x",sample->off1);
-          ImGui::Text("offDPCM: %x",sample->offDPCM);
-          ImGui::Text("offZ: %x",sample->offZ);
-          ImGui::Text("offQSoundA: %x",sample->offQSoundA);
-          ImGui::Text("offA: %x",sample->offA);
-          ImGui::Text("offB: %x",sample->offB);
-          ImGui::Text("offBRR: %x",sample->offBRR);
-          ImGui::Text("offVOX: %x",sample->offVOX);
-          ImGui::Text("offSegaPCM: %x",sample->offSegaPCM);
-          ImGui::Text("offQSound: %x",sample->offQSound);
-          ImGui::Text("offX1_010: %x",sample->offX1_010);
-          ImGui::Text("offSU: %x",sample->offSU);
-          ImGui::Text("offYMZ280B: %x",sample->offYMZ280B);
-          ImGui::Text("offRF5C68: %x",sample->offRF5C68);
-
           ImGui::Text("samples: %d",sample->samples);
           ImGui::TreePop();
         }
@@ -199,6 +232,7 @@ void FurnaceGUI::drawDebug() {
     }
     if (ImGui::TreeNode("Oscilloscope Debug")) {
       int c=0;
+      ImGui::Checkbox("FFT debug view",&debugFFT);
       for (int i=0; i<e->song.systemLen; i++) {
         DivSystem system=e->song.system[i];
         if (e->getChannelCount(system)>0) {
@@ -295,6 +329,163 @@ void FurnaceGUI::drawDebug() {
       }
       ImGui::TreePop();
     }
+    if (ImGui::TreeNode("Do Action")) {
+      char bindID[1024];
+      for (int j=0; j<GUI_ACTION_MAX; j++) {
+        if (strcmp(guiActions[j].friendlyName,"")==0) continue;
+        if (strstr(guiActions[j].friendlyName,"---")==guiActions[j].friendlyName) {
+          ImGui::TextUnformatted(guiActions[j].friendlyName);
+        } else {
+          snprintf(bindID,1024,"%s##DO_%d",guiActions[j].friendlyName,j);
+          if (ImGui::Button(bindID)) {
+            doAction(j);
+          }
+        }
+      }
+      ImGui::TreePop();
+    }
+    if (ImGui::TreeNode("Pitch Table Calculator")) {
+      ImGui::InputDouble("Clock",&ptcClock);
+      ImGui::InputDouble("Divider/FreqBase",&ptcDivider);
+      ImGui::InputInt("Octave",&ptcOctave);
+      if (ImGui::RadioButton("Frequency",ptcMode==0)) ptcMode=0;
+      ImGui::SameLine();
+      if (ImGui::RadioButton("Period",ptcMode==1)) ptcMode=1;
+      ImGui::SameLine();
+      if (ImGui::RadioButton("FreqNum/Block",ptcMode==2)) ptcMode=2;
+
+      if (ptcMode==2) {
+        if (ImGui::InputInt("FreqNum Bits",&ptcBlockBits)) {
+          if (ptcBlockBits<0) ptcBlockBits=0;
+          if (ptcBlockBits>13) ptcBlockBits=13;
+        }
+      }
+
+      if (ImGui::BeginTable("PitchTable",7)) {
+        ImGui::TableNextRow(ImGuiTableRowFlags_Headers);
+        ImGui::TableNextColumn();
+        ImGui::Text("Note");
+        ImGui::TableNextColumn();
+        ImGui::Text("Pitch");
+
+        ImGui::TableNextColumn();
+        ImGui::Text("Base");
+        ImGui::TableNextColumn();
+        ImGui::Text("Hex");
+
+        ImGui::TableNextColumn();
+        ImGui::Text("Final");
+
+        ImGui::TableNextColumn();
+        ImGui::Text("Hex");
+
+        ImGui::TableNextColumn();
+        ImGui::Text("Delta");
+
+        int lastFinal=0;
+        for (int i=0; i<12; i++) {
+          int note=(12*ptcOctave)+i;
+          int pitch=0;
+
+          int base=e->calcBaseFreq(ptcClock,ptcDivider,note,ptcMode==1);
+          int final=e->calcFreq(base,pitch,ptcMode==1,0,0,ptcClock,ptcDivider,(ptcMode==2)?ptcBlockBits:0);
+
+          ImGui::TableNextRow();
+          ImGui::TableNextColumn();
+          ImGui::Text("%d",note);
+          ImGui::TableNextColumn();
+          ImGui::Text("%d",pitch);
+
+          ImGui::TableNextColumn();
+          ImGui::Text("%d",base);
+          ImGui::TableNextColumn();
+          ImGui::Text("%x",base);
+
+          ImGui::TableNextColumn();
+          ImGui::Text("%d",final);
+          ImGui::TableNextColumn();
+          ImGui::Text("%x",final);
+
+          ImGui::TableNextColumn();
+          ImGui::Text("%d",final-lastFinal);
+
+          lastFinal=final;
+        }
+
+        ImGui::EndTable();
+      }
+      ImGui::TreePop();
+    }
+    if (ImGui::TreeNodeEx("Window Debug",ImGuiTreeNodeFlags_DefaultOpen)) {
+      ImGui::Text("Screen: %dx%d+%d+%d",scrW,scrH,scrX,scrY);
+      ImGui::Text("Screen (Conf): %dx%d+%d+%d",scrConfW,scrConfH,scrConfX,scrConfY);
+      ImGui::Text("Canvas: %dx%d",canvasW,canvasH);
+      ImGui::Text("Maximized: %d",scrMax);
+      ImGui::Text("System Managed Scale: %d",sysManagedScale);
+      ImGui::TreePop();
+    }
+    if (ImGui::TreeNode("Audio Debug")) {
+      TAAudioDesc& audioWant=e->getAudioDescWant();
+      TAAudioDesc& audioGot=e->getAudioDescGot();
+
+      ImGui::Text("want:");
+      ImGui::Text("- name: %s",audioWant.name.c_str());
+      ImGui::Text("- device name: %s",audioWant.deviceName.c_str());
+      ImGui::Text("- rate: %f",audioWant.rate);
+      ImGui::Text("- buffer size: %d",audioWant.bufsize);
+      ImGui::Text("- fragments: %d",audioWant.fragments);
+      ImGui::Text("- inputs: %d",audioWant.inChans);
+      ImGui::Text("- outputs: %d",audioWant.outChans);
+      ImGui::Text("- format: %d",audioWant.outFormat);
+
+      ImGui::Text("got:");
+      ImGui::Text("- name: %s",audioGot.name.c_str());
+      ImGui::Text("- device name: %s",audioGot.deviceName.c_str());
+      ImGui::Text("- rate: %f",audioGot.rate);
+      ImGui::Text("- buffer size: %d",audioGot.bufsize);
+      ImGui::Text("- fragments: %d",audioGot.fragments);
+      ImGui::Text("- inputs: %d",audioGot.inChans);
+      ImGui::Text("- outputs: %d",audioGot.outChans);
+      ImGui::Text("- format: %d",audioGot.outFormat);
+
+      ImGui::Text("last call to nextBuf(): in %d, out %d, size %d",e->lastNBIns,e->lastNBOuts,e->lastNBSize);
+
+      ImGui::TreePop();
+    }
+    if (ImGui::TreeNode("MIDI Debug")) {
+      if (ImGui::Button("Enable Debug (go to log viewer)")) {
+        e->setMidiDebug(true);
+        nextWindow=GUI_WINDOW_LOG;
+      }
+      ImGui::TreePop();
+    }
+    if (ImGui::TreeNode("Visualizer Debug")) {
+      if (ImGui::BeginTable("visX",3,ImGuiTableFlags_Borders)) {
+        ImGui::TableNextRow(ImGuiTableRowFlags_Headers);
+        ImGui::TableNextColumn();
+        ImGui::Text("channel");
+        ImGui::TableNextColumn();
+        ImGui::Text("patChanX");
+        ImGui::TableNextColumn();
+        ImGui::Text("patChanSlideY");
+
+        for (int i=0; i<e->getTotalChannelCount(); i++) {
+          ImGui::TableNextRow();
+          ImGui::TableNextColumn();
+          ImGui::Text("%d",i);
+          ImGui::TableNextColumn();
+          ImGui::Text("%f",patChanX[i]);
+          ImGui::TableNextColumn();
+          ImGui::Text("%f",patChanSlideY[i]);
+        }
+
+        ImGui::EndTable();
+      }
+      
+      ImGui::Text("particle count: %d",(int)particles.size());
+
+      ImGui::TreePop();
+    }
     if (ImGui::TreeNode("Playground")) {
       if (pgSys<0 || pgSys>=e->song.systemLen) pgSys=0;
       if (ImGui::BeginCombo("Chip",fmt::sprintf("%d. %s",pgSys+1,e->getSystemName(e->song.system[pgSys])).c_str())) {
@@ -338,6 +529,7 @@ void FurnaceGUI::drawDebug() {
         pgProgram.clear();
       }
       
+      ImGui::AlignTextToFramePadding();
       ImGui::Text("Address");
       ImGui::SameLine();
       ImGui::SetNextItemWidth(100.0f*dpiScale);
@@ -382,9 +574,9 @@ void FurnaceGUI::drawDebug() {
     }
     if (ImGui::TreeNode("ADSR Test Area")) {
       static int tl, ar, dr, d2r, sl, rr, sus, egt, algOrGlobalSus, instType;
-      static float maxArDr, maxTl;
+      static float maxArDr, maxTl, maxRr;
       ImGui::Text("This window was done out of frustration");
-      drawFMEnv(tl,ar,dr,d2r,rr,sl,sus,egt,algOrGlobalSus,maxTl,maxArDr,ImVec2(200.0f*dpiScale,100.0f*dpiScale),instType);
+      drawFMEnv(tl,ar,dr,d2r,rr,sl,sus,egt,algOrGlobalSus,maxTl,maxArDr,maxRr,ImVec2(200.0f*dpiScale,100.0f*dpiScale),instType);
 
       ImGui::InputInt("tl",&tl);
       ImGui::InputInt("ar",&ar);
@@ -398,8 +590,137 @@ void FurnaceGUI::drawDebug() {
       ImGui::InputInt("instType",&instType);
       ImGui::InputFloat("maxArDr",&maxArDr);
       ImGui::InputFloat("maxTl",&maxTl);
+      ImGui::InputFloat("maxRr",&maxRr);
       ImGui::TreePop();
     }
+    if (ImGui::TreeNode("FM Preview")) {
+      float asFloat[FM_PREVIEW_SIZE];
+      for (int i=0; i<FM_PREVIEW_SIZE; i++) {
+        asFloat[i]=(float)fmPreview[i]/8192.0f;
+      }
+      ImGui::PlotLines("##DebugFMPreview",asFloat,FM_PREVIEW_SIZE,0,"Preview",-1.0,1.0,ImVec2(300.0f*dpiScale,150.0f*dpiScale));
+      ImGui::TreePop();
+    }
+    if (ImGui::TreeNode("Recent Files")) {
+      ImGui::Text("Items: %d - Max: %d",(int)recentFile.size(),settings.maxRecentFile);
+      ImGui::Text("readPos: %d - writePos: %d",(int)recentFile.readPos,(int)recentFile.writePos);
+      ImGui::Indent();
+      for (size_t i=0; i<recentFile.size(); i++) {
+        ImGui::Text("%d: %s",(int)i,recentFile[i].c_str());
+      }
+      ImGui::Unindent();
+      ImGui::TreePop();
+    }
+    if (ImGui::TreeNode("Texture Test")) {
+      ImGui::Text("Create and Destroy 128 Textures");
+      if (ImGui::Button("No Write")) {
+        for (int i=0; i<128; i++) {
+          FurnaceGUITexture* t=rend->createTexture(false,2048,2048,true,bestTexFormat);
+          if (t==NULL) {
+            showError(fmt::sprintf("Failure! %d",i));
+            break;
+          }
+          rend->destroyTexture(t);
+        }
+      }
+      if (ImGui::Button("Write (update)")) {
+        unsigned char* data=new unsigned char[2048*2048*4];
+        for (int i=0; i<2048*2048*4; i++) {
+          data[i]=rand();
+        }
+        for (int i=0; i<128; i++) {
+          FurnaceGUITexture* t=rend->createTexture(false,2048,2048,true,bestTexFormat);
+          if (t==NULL) {
+            showError(fmt::sprintf("Failure! %d",i));
+            break;
+          }
+          rend->updateTexture(t,data,2048*4);
+          rend->destroyTexture(t);
+        }
+        delete[] data;
+      }
+      if (ImGui::Button("Write (lock)")) {
+        unsigned char* data=NULL;
+        int pitch=0;
+        for (int i=0; i<128; i++) {
+          FurnaceGUITexture* t=rend->createTexture(false,2048,2048,true,bestTexFormat);
+          if (t==NULL) {
+            showError(fmt::sprintf("Failure! %d",i));
+            break;
+          }
+          if (rend->lockTexture(t,(void**)&data,&pitch)) {
+            for (int i=0; i<2048*2048*4; i++) {
+              data[i]=rand();
+            }
+            rend->unlockTexture(t);
+          }
+          rend->destroyTexture(t);
+        }
+      }
+      ImGui::TreePop();
+    }
+    if (ImGui::TreeNode("Locale Test")) {
+      ImGui::TextUnformatted(_("This is a language test."));
+      ImGui::TextUnformatted(_("This is another language test."));
+      ImGui::TreePop();
+    }
+    if (ImGui::TreeNode("Osc Render Test")) {
+      ImGui::InputInt("Length",&oscDebugLen);
+      ImGui::InputInt("Height",&oscDebugHeight);
+      ImGui::InputFloat("Line Size",&oscDebugLineSize);
+      ImGui::InputFloat("Min",&oscDebugMin);
+      ImGui::InputFloat("Max",&oscDebugMax);
+      ImGui::InputFloat("Power",&oscDebugPower);
+      ImGui::InputInt("Repeat",&oscDebugRepeat);
+
+      if (oscDebugLen<1) oscDebugLen=1;
+      if (oscDebugLen>2048) oscDebugLen=2048;
+
+      if (oscDebugHeight<1) oscDebugHeight=1;
+      if (oscDebugHeight>2048) oscDebugHeight=2048;
+
+      memset(oscDebugData,0,2048*sizeof(float));
+      for (int i=0; i<oscDebugLen; i++) {
+        oscDebugData[i]=oscDebugMin+(oscDebugMax-oscDebugMin)*pow((float)((i*oscDebugRepeat)%oscDebugLen)/(float)oscDebugLen,oscDebugPower);
+      }
+      
+      if (rend->supportsDrawOsc()) {
+        ImDrawList* dl=ImGui::GetWindowDrawList();
+        ImGuiWindow* window=ImGui::GetCurrentWindow();
+
+        ImVec2 size=ImVec2(oscDebugLen,oscDebugHeight);
+        ImVec2 minArea=window->DC.CursorPos;
+        ImVec2 maxArea=ImVec2(
+          minArea.x+size.x,
+          minArea.y+size.y
+        );
+        ImRect rect=ImRect(minArea,maxArea);
+        ImGuiStyle& style=ImGui::GetStyle();
+        ImGui::ItemSize(size,style.FramePadding.y);
+        if (ImGui::ItemAdd(rect,ImGui::GetID("debugOsc"))) {
+          _debugDo.gui=this;
+          _debugDo.data=oscDebugData;
+          _debugDo.len=oscDebugLen;
+          _debugDo.pos0=rect.Min;
+          _debugDo.pos1=rect.Max;
+          _debugDo.color=ImVec4(1.0,1.0,1.0,1.0);
+          _debugDo.lineSize=dpiScale*oscDebugLineSize;
+
+          dl->AddCallback(_drawOsc,&_debugDo);
+          dl->AddCallback(ImDrawCallback_ResetRenderState,NULL);
+        }
+      } else {
+        ImGui::Text("Render Backend does not support osc rendering.");
+      }
+      ImGui::TreePop();
+    }
+#ifdef HAVE_LOCALE
+    if (ImGui::TreeNode("Plural Form Test")) {
+      ImGui::InputInt("Number",&numApples);
+      ImGui::Text(ngettext("%d apple","%d apples",numApples),numApples);
+      ImGui::TreePop();
+    }
+#endif
     if (ImGui::TreeNode("User Interface")) {
       if (ImGui::Button("Inspect")) {
         inspectorOpen=!inspectorOpen;
@@ -407,13 +728,32 @@ void FurnaceGUI::drawDebug() {
       if (ImGui::Button("Spoiler")) {
         spoilerOpen=!spoilerOpen;
       }
+      if (ImGui::Button("Kill Graphics")) {
+        killGraphics=true;
+      }
       ImGui::TreePop();
     }
     if (ImGui::TreeNode("Performance")) {
       double perfFreq=SDL_GetPerformanceFrequency()/1000000.0;
+      int lastProcTime=(int)e->processTime/1000;
+      TAAudioDesc& audioGot=e->getAudioDescGot();
+
+      ImGui::Text("video frame: %.0fµs",ImGui::GetIO().DeltaTime*1000000.0);
+      ImGui::Text("audio frame: %.0fµs",1000000.0*(double)audioGot.bufsize/(double)audioGot.rate);
+      ImGui::Separator();
+
+      ImGui::Text("audio: %dµs",lastProcTime);
       ImGui::Text("render: %.0fµs",(double)renderTimeDelta/perfFreq);
+      ImGui::Text("draw: %.0fµs",(double)drawTimeDelta/perfFreq);
+      ImGui::Text("swap: %.0fµs",(double)swapTimeDelta/perfFreq);
       ImGui::Text("layout: %.0fµs",(double)layoutTimeDelta/perfFreq);
       ImGui::Text("event: %.0fµs",(double)eventTimeDelta/perfFreq);
+      ImGui::Separator();
+
+      ImGui::Text("details:");
+      for (int i=0; i<perfMetricsLastLen; i++) {
+        ImGui::Text("%s: %.0fµs",perfMetricsLast[i].name,(double)perfMetricsLast[i].elapsed/perfFreq);
+      }
       ImGui::TreePop();
     }
     if (ImGui::TreeNode("Settings")) {

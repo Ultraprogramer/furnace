@@ -1,6 +1,6 @@
 /**
  * Furnace Tracker - multi-system chiptune tracker
- * Copyright (C) 2021-2022 tildearrow and contributors
+ * Copyright (C) 2021-2024 tildearrow and contributors
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -19,13 +19,16 @@
 
 #include "opll.h"
 #include "../engine.h"
+#include "../../ta-log.h"
 #include <string.h>
 #include <math.h>
 
 #define rWrite(a,v) if (!skipRegisterWrites) {pendingWrites[a]=v;}
-#define immWrite(a,v) if (!skipRegisterWrites) {writes.emplace(a,v); if (dumpWrites) {addWrite(a,v);} }
+#define immWrite(a,v) if (!skipRegisterWrites) {writes.push(QueuedWrite(a,v)); if (dumpWrites) {addWrite(a,v);} }
 
 #define CHIP_FREQBASE 1180068
+
+#define DRUM_VOL(_x) (drumActivated[_x]?drumVol[_x]:15)
 
 const unsigned char cycleMapOPLL[18]={
   8, 7, 6, 7, 8, 7, 8, 6, 0, 1, 2, 7, 8, 9, 3, 4, 5, 9
@@ -39,11 +42,11 @@ const unsigned char visMapOPLL[9]={
   6, 7, 8, 3, 4, 5, 0, 1, 2
 };
 
-void DivPlatformOPLL::acquire_nuked(short* bufL, short* bufR, size_t start, size_t len) {
-  static int o[2];
-  static int os;
+void DivPlatformOPLL::acquire_nuked(short** buf, size_t len) {
+  thread_local int o[2];
+  thread_local int os;
 
-  for (size_t h=start; h<start+len; h++) {
+  for (size_t h=0; h<len; h++) {
     os=0;
     for (int i=0; i<9; i++) {
       if (!writes.empty() && --delay<0) {
@@ -51,7 +54,7 @@ void DivPlatformOPLL::acquire_nuked(short* bufL, short* bufR, size_t start, size
         QueuedWrite& w=writes.front();
         if (w.addrOrVal) {
           OPLL_Write(&fm,1,w.val);
-          //printf("write: %x = %.2x\n",w.addr,w.val);
+          //logV("write: %x = %.2x",w.addr,w.val);
           regPool[w.addr&0xff]=w.val;
           writes.pop();
           delay=21;
@@ -83,15 +86,52 @@ void DivPlatformOPLL::acquire_nuked(short* bufL, short* bufR, size_t start, size
     os*=50;
     if (os<-32768) os=-32768;
     if (os>32767) os=32767;
-    bufL[h]=os;
+    buf[0][h]=os;
   }
 }
 
-void DivPlatformOPLL::acquire_ymfm(short* bufL, short* bufR, size_t start, size_t len) {
+void DivPlatformOPLL::acquire_ymfm(short** buf, size_t len) {
 }
 
-void DivPlatformOPLL::acquire(short* bufL, short* bufR, size_t start, size_t len) {
-  acquire_nuked(bufL,bufR,start,len);
+static const unsigned char freakingDrumMap[5]={
+  9, 11, 12, 13, 10
+};
+
+void DivPlatformOPLL::acquire_emu(short** buf, size_t len) {
+  thread_local int os;
+
+  for (size_t h=0; h<len; h++) {
+    if (!writes.empty()) {
+      QueuedWrite& w=writes.front();
+      OPLL_writeReg(fm_emu,w.addr,w.val);
+      writes.pop();
+    }
+    os=-OPLL_calc(fm_emu);
+    os=os+(os<<1);
+    if (os<-32768) os=-32768;
+    if (os>32767) os=32767;
+    
+    buf[0][h]=os;
+
+    for (int i=0; i<11; i++) {
+      if (i>=6 && properDrums) {
+        oscBuf[i]->data[oscBuf[i]->needle++]=(-fm_emu->ch_out[freakingDrumMap[i-6]])<<3;
+      } else {
+        oscBuf[i]->data[oscBuf[i]->needle++]=(-fm_emu->ch_out[i])<<3;
+      }
+    }
+  }
+}
+
+void DivPlatformOPLL::acquire(short** buf, size_t len) {
+  switch (selCore) {
+    case 0:
+      acquire_nuked(buf,len);
+      break;
+    case 1:
+      acquire_emu(buf,len);
+      break;
+  }
 }
 
 void DivPlatformOPLL::tick(bool sysTick) {
@@ -99,13 +139,23 @@ void DivPlatformOPLL::tick(bool sysTick) {
     chan[i].std.next();
 
     if (chan[i].std.vol.had) {
-      chan[i].outVol=VOL_SCALE_LOG(chan[i].vol,MIN(15,chan[i].std.vol.val),15);
-      if (i<9) {
-        rWrite(0x30+i,((15-VOL_SCALE_LOG(chan[i].outVol,15-chan[i].state.op[1].tl,15))&15)|(chan[i].state.opllPreset<<4));
+      chan[i].outVol=VOL_SCALE_LOG_BROKEN(chan[i].vol,MIN(15,chan[i].std.vol.val),15);
+
+      if (i>=6 && properDrums) {
+        drumVol[i-6]=15-chan[i].outVol;
+        rWrite(0x36,DRUM_VOL(0));
+        rWrite(0x37,DRUM_VOL(1)|(DRUM_VOL(4)<<4));
+        rWrite(0x38,DRUM_VOL(3)|(DRUM_VOL(2)<<4));
+      } else if (i<6 || !crapDrums) {
+        if (i<9) {
+          rWrite(0x30+i,((15-VOL_SCALE_LOG_BROKEN(chan[i].outVol,15-chan[i].state.op[1].tl,15))&15)|(chan[i].state.opllPreset<<4));
+        }
       }
     }
 
-    if (chan[i].std.arp.had) {
+    if (NEW_ARP_STRAT) {
+      chan[i].handleArp();
+    } else if (chan[i].std.arp.had) {
       if (!chan[i].inPorta) {
         chan[i].baseFreq=NOTE_FREQUENCY(parent->calcArp(chan[i].note,chan[i].std.arp.val));
       }
@@ -115,14 +165,14 @@ void DivPlatformOPLL::tick(bool sysTick) {
     if (chan[i].std.wave.had && chan[i].state.opllPreset!=16) {
       chan[i].state.opllPreset=chan[i].std.wave.val;
       if (i<9) {
-        rWrite(0x30+i,((15-VOL_SCALE_LOG(chan[i].outVol,15-chan[i].state.op[1].tl,15))&15)|(chan[i].state.opllPreset<<4));
+        rWrite(0x30+i,((15-VOL_SCALE_LOG_BROKEN(chan[i].outVol,15-chan[i].state.op[1].tl,15))&15)|(chan[i].state.opllPreset<<4));
       }
     }
 
     if (chan[i].std.pitch.had) {
       if (chan[i].std.pitch.mode) {
         chan[i].pitch2+=chan[i].std.pitch.val;
-        CLAMP_VAR(chan[i].pitch2,-32768,32767);
+        CLAMP_VAR(chan[i].pitch2,-65535,65535);
       } else {
         chan[i].pitch2=chan[i].std.pitch.val;
       }
@@ -182,10 +232,10 @@ void DivPlatformOPLL::tick(bool sysTick) {
           rWrite(0x06+j,(op.sl<<4)|(op.rr));
         }
         if (m.tl.had) {
-          op.tl=((j==1)?15:63)-m.tl.val;
+          op.tl=m.tl.val&((j==1)?15:63);
           if (j==1) {
             if (i<9) {
-              rWrite(0x30+i,((15-VOL_SCALE_LOG(chan[i].outVol,15-chan[i].state.op[1].tl,15))&15)|(chan[i].state.opllPreset<<4));
+              rWrite(0x30+i,((15-VOL_SCALE_LOG_BROKEN(chan[i].outVol,15-chan[i].state.op[1].tl,15))&15)|(chan[i].state.opllPreset<<4));
             }
           } else {
             rWrite(0x02,(chan[i].state.op[0].ksl<<6)|(op.tl&63));
@@ -219,13 +269,16 @@ void DivPlatformOPLL::tick(bool sysTick) {
       if (i>=6 && properDrums) {
         drumState&=~(0x10>>(i-6));
         immWrite(0x0e,0x20|drumState);
-      } else if (i>=6 && drums) {
+        //logV("properDrums %d",i);
+      } else if (i>=6 && crapDrums) {
         drumState&=~(0x10>>(chan[i].note%12));
         immWrite(0x0e,0x20|drumState);
+        //logV("drums %d",i);
       } else {
         if (i<9) {
           immWrite(0x20+i,(chan[i].freqH)|(chan[i].state.alg?0x20:0));
         }
+        //logV("normal %d",i);
       }
       //chan[i].keyOn=false;
       chan[i].keyOff=false;
@@ -241,20 +294,36 @@ void DivPlatformOPLL::tick(bool sysTick) {
 
   for (int i=0; i<11; i++) {
     if (chan[i].freqChanged) {
-      chan[i].freq=parent->calcFreq(chan[i].baseFreq,chan[i].pitch,false,octave(chan[i].baseFreq)*2,chan[i].pitch2,chipClock,CHIP_FREQBASE);
-      if (chan[i].fixedFreq>0) chan[i].freq=chan[i].fixedFreq;
-      if (chan[i].freq>262143) chan[i].freq=262143;
-      int freqt=toFreq(chan[i].freq)+chan[i].pitch2;
+      chan[i].freq=parent->calcFreq(chan[i].baseFreq,chan[i].pitch,chan[i].fixedArp?chan[i].baseNoteOverride:chan[i].arpOff,chan[i].fixedArp,false,octave(chan[i].baseFreq)*2,chan[i].pitch2,chipClock,CHIP_FREQBASE);
+      if (chan[i].fixedFreq>0 && properDrums) chan[i].freq=chan[i].fixedFreq;
+      if (chan[i].freq<0) chan[i].freq=0;
+      if (chan[i].freq>65535) chan[i].freq=65535;
+      int freqt=toFreq(chan[i].freq);
+      if (freqt>4095) freqt=4095;
       chan[i].freqL=freqt&0xff;
-      if (i>=6 && properDrums) {
+      if (i>=6 && properDrums && (i<9 || !noTopHatFreq)) {
         immWrite(0x10+drumSlot[i],freqt&0xff);
         immWrite(0x20+drumSlot[i],freqt>>8);
-      } else if (i<6 || !drums) {
+        switch (i) {
+          case 7:
+            lastFreqSH=0;
+            break;
+          case 8:
+            lastFreqTT=0;
+            break;
+          case 9:
+            lastFreqTT=1;
+            break;
+          case 19:
+            lastFreqSH=1;
+            break;
+        }
+      } else if (i<6 || !crapDrums) {
         if (i<9) {
           immWrite(0x10+i,freqt&0xff);
         }
       }
-      chan[i].freqH=freqt>>8;
+      chan[i].freqH=(freqt>>8)&15;
     }
     if (chan[i].keyOn && i>=6 && properDrums) {
       if (!isMuted[i]) {
@@ -262,7 +331,7 @@ void DivPlatformOPLL::tick(bool sysTick) {
         immWrite(0x0e,0x20|drumState);
       }
       chan[i].keyOn=false;
-    } else if (chan[i].keyOn && i>=6 && drums) {
+    } else if (chan[i].keyOn && i>=6 && crapDrums) {
       //printf("%d\n",chan[i].note%12);
       drumState|=(0x10>>(chan[i].note%12));
       immWrite(0x0e,0x20|drumState);
@@ -325,6 +394,109 @@ int DivPlatformOPLL::toFreq(int freq) {
 
 void DivPlatformOPLL::muteChannel(int ch, bool mute) {
   isMuted[ch]=mute;
+  if (selCore==1) {
+    OPLL_setMask(fm_emu,
+      (isMuted[0]?1:0)|
+      (isMuted[1]?2:0)|
+      (isMuted[2]?4:0)|
+      (isMuted[3]?8:0)|
+      (isMuted[4]?16:0)|
+      (isMuted[5]?32:0)|
+      (isMuted[6]?64:0)|
+      (isMuted[7]?128:0)|
+      (isMuted[8]?256:0)
+    );
+  }
+}
+
+void DivPlatformOPLL::commitState(int ch, DivInstrument* ins) {
+  if (chan[ch].insChanged) {
+    chan[ch].state=ins->fm;
+  }
+
+  if (chan[ch].insChanged) {
+    // update custom preset
+    if (chan[ch].state.opllPreset==0) {
+      DivInstrumentFM::Operator& mod=chan[ch].state.op[0];
+      DivInstrumentFM::Operator& car=chan[ch].state.op[1];
+      rWrite(0x00,(mod.am<<7)|(mod.vib<<6)|((mod.ssgEnv&8)<<2)|(mod.ksr<<4)|(mod.mult));
+      rWrite(0x01,(car.am<<7)|(car.vib<<6)|((car.ssgEnv&8)<<2)|(car.ksr<<4)|(car.mult));
+      rWrite(0x02,(mod.ksl<<6)|(mod.tl&63));
+      rWrite(0x03,(car.ksl<<6)|((chan[ch].state.fms&1)<<4)|((chan[ch].state.ams&1)<<3)|chan[ch].state.fb);
+      rWrite(0x04,(mod.ar<<4)|(mod.dr));
+      rWrite(0x05,(car.ar<<4)|(car.dr));
+      rWrite(0x06,(mod.sl<<4)|(mod.rr));
+      rWrite(0x07,(car.sl<<4)|(car.rr));
+      lastCustomMemory=ch;
+    }
+    if (chan[ch].state.opllPreset==16) { // compatible drums mode
+      if (ch>=6) {
+        if (!properDrumsSys) {
+          crapDrums=true;
+          immWrite(0x16,0x20);
+          immWrite(0x26,0x05);
+          immWrite(0x16,0x20);
+          immWrite(0x26,0x05);
+          immWrite(0x17,0x50);
+          immWrite(0x27,0x05);
+          immWrite(0x17,0x50);
+          immWrite(0x27,0x05);
+          immWrite(0x18,0xC0);
+          immWrite(0x28,0x01);
+        }
+      }
+    } else {
+      if (ch>=6) {
+        if (crapDrums) {
+          crapDrums=false;
+          immWrite(0x0e,0);
+          drumState=0;
+        }
+      }
+      if (ch<9) {
+        rWrite(0x30+ch,((15-VOL_SCALE_LOG_BROKEN(chan[ch].outVol,15-chan[ch].state.op[1].tl,15))&15)|(chan[ch].state.opllPreset<<4));
+      }
+    }
+  }
+}
+
+void DivPlatformOPLL::switchMode(bool mode) {
+  if (mode==properDrums) return;
+  if (mode) {
+    //logV("mode switch to DRUMS");
+    for (int i=0; i<5; i++) {
+      drumActivated[i]=chan[6+i].keyOn;
+    }
+
+    immWrite(0x26,0);
+    immWrite(0x27,0);
+    immWrite(0x28,0);
+    immWrite(0x16,0);
+    immWrite(0x17,0);
+    immWrite(0x18,0);
+    immWrite(0x0e,0x20);
+    rWrite(0x36,DRUM_VOL(0));
+    rWrite(0x37,DRUM_VOL(1)|(DRUM_VOL(4)<<4));
+    rWrite(0x38,DRUM_VOL(3)|(DRUM_VOL(2)<<4));
+    oldWrites[0x36]=-1;
+    oldWrites[0x37]=-1;
+    oldWrites[0x38]=-1;
+  } else {
+    //logV("mode switch to NORMAL");
+    immWrite(0x0e,0x20);
+    immWrite(0x0e,0x00);
+    for (int i=6; i<9; i++) {
+      if (chan[i].active) {
+        chan[i].freqChanged=true;
+        chan[i].keyOff=false;
+        chan[i].keyOn=true;
+        oldWrites[0x30+i]=-1;
+      }
+      chan[i].insChanged=true;
+    }
+  }
+  properDrums=mode;
+  drumState=0;
 }
 
 int DivPlatformOPLL::dispatch(DivCommand c) {
@@ -343,22 +515,31 @@ int DivPlatformOPLL::dispatch(DivCommand c) {
 
       if (c.chan>=6 && properDrums) { // drums mode
         chan[c.chan].insChanged=false;
+        drumActivated[c.chan-6]=true;
         if (c.value!=DIV_NOTE_NULL) {
           if (chan[c.chan].state.opllPreset==16 && chan[c.chan].state.fixedDrums) {
-            switch (c.chan) {
-              case 6:
-                chan[c.chan].fixedFreq=(chan[c.chan].state.kickFreq&511)<<(chan[c.chan].state.kickFreq>>9);
-                break;
-              case 7: case 10:
-                chan[c.chan].fixedFreq=(chan[c.chan].state.snareHatFreq&511)<<(chan[c.chan].state.snareHatFreq>>9);
-                break;
-              case 8: case 9:
-                chan[c.chan].fixedFreq=(chan[c.chan].state.tomTopFreq&511)<<(chan[c.chan].state.tomTopFreq>>9);
-                break;
-              default:
-                chan[c.chan].fixedFreq=0;
-                chan[c.chan].baseFreq=NOTE_FREQUENCY(c.value);
-                break;
+            if (fixedAll) {
+              chan[6].fixedFreq=(chan[c.chan].state.kickFreq&511)<<(chan[c.chan].state.kickFreq>>9);
+              chan[7].fixedFreq=(chan[c.chan].state.snareHatFreq&511)<<(chan[c.chan].state.snareHatFreq>>9);
+              chan[8].fixedFreq=(chan[c.chan].state.tomTopFreq&511)<<(chan[c.chan].state.tomTopFreq>>9);
+              chan[9].fixedFreq=(chan[c.chan].state.tomTopFreq&511)<<(chan[c.chan].state.tomTopFreq>>9);
+              chan[10].fixedFreq=(chan[c.chan].state.snareHatFreq&511)<<(chan[c.chan].state.snareHatFreq>>9);              
+
+              chan[7].freqChanged=true;
+              chan[8].freqChanged=true;
+              chan[9].freqChanged=true;
+            } else {
+              switch (c.chan) {
+                case 6:
+                  chan[c.chan].fixedFreq=(chan[c.chan].state.kickFreq&511)<<(chan[c.chan].state.kickFreq>>9);
+                  break;
+                case 7: case 10:
+                  chan[c.chan].fixedFreq=(chan[c.chan].state.snareHatFreq&511)<<(chan[c.chan].state.snareHatFreq>>9);
+                  break;
+                case 8: case 9:
+                  chan[c.chan].fixedFreq=(chan[c.chan].state.tomTopFreq&511)<<(chan[c.chan].state.tomTopFreq>>9);
+                  break;
+              }
             }
           } else {
             chan[c.chan].baseFreq=NOTE_FREQUENCY(c.value);
@@ -368,59 +549,21 @@ int DivPlatformOPLL::dispatch(DivCommand c) {
         }
         chan[c.chan].keyOn=true;
         chan[c.chan].active=true;
+
+        rWrite(0x36,DRUM_VOL(0));
+        rWrite(0x37,DRUM_VOL(1)|(DRUM_VOL(4)<<4));
+        rWrite(0x38,DRUM_VOL(3)|(DRUM_VOL(2)<<4));
         break;
       }
       
-      if (chan[c.chan].insChanged) {
-        // update custom preset
-        if (chan[c.chan].state.opllPreset==0) {
-          DivInstrumentFM::Operator& mod=chan[c.chan].state.op[0];
-          DivInstrumentFM::Operator& car=chan[c.chan].state.op[1];
-          rWrite(0x00,(mod.am<<7)|(mod.vib<<6)|((mod.ssgEnv&8)<<2)|(mod.ksr<<4)|(mod.mult));
-          rWrite(0x01,(car.am<<7)|(car.vib<<6)|((car.ssgEnv&8)<<2)|(car.ksr<<4)|(car.mult));
-          rWrite(0x02,(mod.ksl<<6)|(mod.tl&63));
-          rWrite(0x03,(car.ksl<<6)|((chan[c.chan].state.fms&1)<<4)|((chan[c.chan].state.ams&1)<<3)|chan[c.chan].state.fb);
-          rWrite(0x04,(mod.ar<<4)|(mod.dr));
-          rWrite(0x05,(car.ar<<4)|(car.dr));
-          rWrite(0x06,(mod.sl<<4)|(mod.rr));
-          rWrite(0x07,(car.sl<<4)|(car.rr));
-          lastCustomMemory=c.chan;
-        }
-        if (chan[c.chan].state.opllPreset==16) { // compatible drums mode
-          if (c.chan>=6) {
-            drums=true;
-            immWrite(0x16,0x20);
-            immWrite(0x26,0x05);
-            immWrite(0x16,0x20);
-            immWrite(0x26,0x05);
-            immWrite(0x17,0x50);
-            immWrite(0x27,0x05);
-            immWrite(0x17,0x50);
-            immWrite(0x27,0x05);
-            immWrite(0x18,0xC0);
-            immWrite(0x28,0x01);
-          }
-        } else {
-          if (c.chan>=6) {
-            if (drums) {
-              drums=false;
-              immWrite(0x0e,0);
-              drumState=0;
-            }
-          }
-          if (c.chan<9) {
-            rWrite(0x30+c.chan,((15-VOL_SCALE_LOG(chan[c.chan].outVol,15-chan[c.chan].state.op[1].tl,15))&15)|(chan[c.chan].state.opllPreset<<4));
-          }
-        }
-      }
-
+      commitState(c.chan,ins);
       chan[c.chan].insChanged=false;
 
       if (c.value!=DIV_NOTE_NULL) {
         chan[c.chan].baseFreq=NOTE_FREQUENCY(c.value);
         chan[c.chan].note=c.value;
 
-        if (c.chan>=6 && drums) {
+        if (c.chan>=6 && crapDrums) {
           switch (chan[c.chan].note%12) {
             case 0: // kick
               drumVol[0]=(15-(chan[c.chan].outVol*(15-chan[c.chan].state.op[1].tl))/15);
@@ -438,9 +581,9 @@ int DivPlatformOPLL::dispatch(DivCommand c) {
               drumVol[4]=(15-(chan[c.chan].outVol*(15-chan[c.chan].state.op[1].tl))/15);
               break;
           }
-          rWrite(0x36,drumVol[0]);
-          rWrite(0x37,drumVol[1]|(drumVol[4]<<4));
-          rWrite(0x38,drumVol[3]|(drumVol[2]<<4));
+          rWrite(0x36,DRUM_VOL(0));
+          rWrite(0x37,DRUM_VOL(1)|(DRUM_VOL(4)<<4));
+          rWrite(0x38,DRUM_VOL(3)|(DRUM_VOL(2)<<4));
         }
         chan[c.chan].freqChanged=true;
       }
@@ -452,12 +595,14 @@ int DivPlatformOPLL::dispatch(DivCommand c) {
       if (c.chan>=9 && !properDrums) return 0;
       chan[c.chan].keyOff=true;
       chan[c.chan].keyOn=false;
+      chan[c.chan].freqChanged=true;
       chan[c.chan].active=false;
       break;
     case DIV_CMD_NOTE_OFF_ENV:
       if (c.chan>=9 && !properDrums) return 0;
       chan[c.chan].keyOff=true;
       chan[c.chan].keyOn=false;
+      chan[c.chan].freqChanged=true;
       chan[c.chan].active=false;
       chan[c.chan].std.release();
       break;
@@ -473,13 +618,13 @@ int DivPlatformOPLL::dispatch(DivCommand c) {
       }
       if (c.chan>=6 && properDrums) {
         drumVol[c.chan-6]=15-chan[c.chan].outVol;
-        rWrite(0x36,drumVol[0]);
-        rWrite(0x37,drumVol[1]|(drumVol[4]<<4));
-        rWrite(0x38,drumVol[3]|(drumVol[2]<<4));
+        rWrite(0x36,DRUM_VOL(0));
+        rWrite(0x37,DRUM_VOL(1)|(DRUM_VOL(4)<<4));
+        rWrite(0x38,DRUM_VOL(3)|(DRUM_VOL(2)<<4));
         break;
-      } else if (c.chan<6 || !drums) {
+      } else if (c.chan<6 || !crapDrums) {
         if (c.chan<9) {
-          rWrite(0x30+c.chan,((15-VOL_SCALE_LOG(chan[c.chan].outVol,15-chan[c.chan].state.op[1].tl,15))&15)|(chan[c.chan].state.opllPreset<<4));
+          rWrite(0x30+c.chan,((15-VOL_SCALE_LOG_BROKEN(chan[c.chan].outVol,15-chan[c.chan].state.op[1].tl,15))&15)|(chan[c.chan].state.opllPreset<<4));
         }
       }
       break;
@@ -535,9 +680,23 @@ int DivPlatformOPLL::dispatch(DivCommand c) {
     }
     case DIV_CMD_LEGATO: {
       if (c.chan>=9 && !properDrums) return 0;
+      if (c.chan<6 || (!crapDrums && !properDrums)) {
+        if (chan[c.chan].insChanged) {
+          DivInstrument* ins=parent->getIns(chan[c.chan].ins,DIV_INS_OPLL);
+          commitState(c.chan,ins);
+          chan[c.chan].insChanged=false;
+        }
+      }
       chan[c.chan].baseFreq=NOTE_FREQUENCY(c.value);
       chan[c.chan].note=c.value;
       chan[c.chan].freqChanged=true;
+      break;
+    }
+    case DIV_CMD_WAVE: {
+      if (c.chan>=6 && (crapDrums || properDrums)) break;
+      if (c.chan>=9) break;
+      chan[c.chan].state.opllPreset=c.value&15;
+      rWrite(0x30+c.chan,((15-VOL_SCALE_LOG_BROKEN(chan[c.chan].outVol,15-chan[c.chan].state.op[1].tl,15))&15)|(chan[c.chan].state.opllPreset<<4));
       break;
     }
     case DIV_CMD_FM_FB: {
@@ -573,7 +732,7 @@ int DivPlatformOPLL::dispatch(DivCommand c) {
         DivInstrumentFM::Operator& car=chan[c.chan].state.op[1];
         car.tl=c.value2&15;
         if (c.chan<9) {
-          rWrite(0x30+c.chan,((15-VOL_SCALE_LOG(chan[c.chan].outVol,15-chan[c.chan].state.op[1].tl,15))&15)|(chan[c.chan].state.opllPreset<<4));
+          rWrite(0x30+c.chan,((15-VOL_SCALE_LOG_BROKEN(chan[c.chan].outVol,15-chan[c.chan].state.op[1].tl,15))&15)|(chan[c.chan].state.opllPreset<<4));
         }
       }
       break;
@@ -743,24 +902,23 @@ int DivPlatformOPLL::dispatch(DivCommand c) {
     case DIV_CMD_FM_EXTCH:
       if (!properDrumsSys) break;
       if ((int)properDrums==c.value) break;
-      if (c.value) {
-        properDrums=true;
-        immWrite(0x0e,0x20);
-      } else {
-        properDrums=false;
-        immWrite(0x0e,0x00);
-        drumState=0;
-      }
+      switchMode(c.value);
       break;
-    case DIV_ALWAYS_SET_VOLUME:
-      return 0;
+    case DIV_CMD_MACRO_OFF:
+      chan[c.chan].std.mask(c.value,true);
+      break;
+    case DIV_CMD_MACRO_ON:
+      chan[c.chan].std.mask(c.value,false);
+      break;
+    case DIV_CMD_MACRO_RESTART:
+      chan[c.chan].std.restart(c.value);
       break;
     case DIV_CMD_GET_VOLMAX:
       return 15;
       break;
     case DIV_CMD_PRE_PORTA:
       if (c.chan>=9 && !properDrums) return 0;
-      if (!chan[c.chan].inPorta && c.value && !parent->song.brokenPortaArp && chan[c.chan].std.arp.will) chan[c.chan].baseFreq=NOTE_FREQUENCY(chan[c.chan].note);
+      if (!chan[c.chan].inPorta && c.value && !parent->song.brokenPortaArp && chan[c.chan].std.arp.will && !NEW_ARP_STRAT) chan[c.chan].baseFreq=NOTE_FREQUENCY(chan[c.chan].note);
       chan[c.chan].inPorta=c.value;
       break;
     case DIV_CMD_PRE_NOTE:
@@ -789,7 +947,7 @@ void DivPlatformOPLL::forceIns() {
       rWrite(0x07,(car.sl<<4)|(car.rr));
     }
     if (i<9) {
-      rWrite(0x30+i,((15-VOL_SCALE_LOG(chan[i].outVol,15-chan[i].state.op[1].tl,15))&15)|(chan[i].state.opllPreset<<4));
+      rWrite(0x30+i,((15-VOL_SCALE_LOG_BROKEN(chan[i].outVol,15-chan[i].state.op[1].tl,15))&15)|(chan[i].state.opllPreset<<4));
     }
     if (!(i>=6 && properDrums)) {
       if (chan[i].active) {
@@ -799,7 +957,7 @@ void DivPlatformOPLL::forceIns() {
       }
     }
   }
-  if (drums) { // WHAT?! FIX THIS!
+  if (crapDrums) { // WHAT?! FIX THIS!
     immWrite(0x16,0x20);
     immWrite(0x26,0x05);
     immWrite(0x16,0x20);
@@ -811,11 +969,25 @@ void DivPlatformOPLL::forceIns() {
     immWrite(0x18,0xC0);
     immWrite(0x28,0x01);
   }
-  // restore drum volumes
+  // restore drum volumes and state
   if (properDrums) {
-    rWrite(0x36,drumVol[0]);
-    rWrite(0x37,drumVol[1]|(drumVol[4]<<4));
-    rWrite(0x38,drumVol[3]|(drumVol[2]<<4));
+    rWrite(0x36,DRUM_VOL(0));
+    rWrite(0x37,DRUM_VOL(1)|(DRUM_VOL(4)<<4));
+    rWrite(0x38,DRUM_VOL(3)|(DRUM_VOL(2)<<4));
+
+    if (lastFreqSH==0) {
+      chan[7].freqChanged=true;
+    } else if (lastFreqSH==1) {
+      chan[10].freqChanged=true;
+    }
+
+    if (lastFreqTT==0) {
+      chan[8].freqChanged=true;
+    } else if (lastFreqTT==1) {
+      chan[9].freqChanged=true;
+    }
+
+    chan[6].freqChanged=true;
   }
   drumState=0;
 }
@@ -843,8 +1015,20 @@ DivMacroInt* DivPlatformOPLL::getChanMacroInt(int ch) {
 }
 
 DivDispatchOscBuffer* DivPlatformOPLL::getOscBuffer(int ch) {
-  if (ch>=9) return NULL;
+  if (ch>=9 && selCore==0) return NULL;
   return oscBuf[ch];
+}
+
+int DivPlatformOPLL::mapVelocity(int ch, float vel) {
+  // -3dB per step
+  if (vel==0) return 0;
+  if (vel>=1.0) return 15;
+  return CLAMP(round(16.0-(14.0-log2(vel*127.0)*2.0)),0,15);
+}
+
+float DivPlatformOPLL::getGain(int ch, int vol) {
+  if (vol==0) return 0;
+  return 1.0/pow(10.0,(float)(15-vol)*3.0/20.0);
 }
 
 unsigned char* DivPlatformOPLL::getRegisterPool() {
@@ -854,6 +1038,10 @@ unsigned char* DivPlatformOPLL::getRegisterPool() {
 int DivPlatformOPLL::getRegisterPoolSize() {
   return 64;
 }
+
+static const unsigned char nukedToEmuPatch[4]={
+  0, 2, 3, 1
+};
 
 void DivPlatformOPLL::reset() {
   while (!writes.empty()) writes.pop();
@@ -880,6 +1068,22 @@ void DivPlatformOPLL::reset() {
   if (dumpWrites) {
     addWrite(0xffffffff,0);
   }
+  if (selCore==1) {
+    OPLL_reset(fm_emu);
+    OPLL_setChipType(fm_emu,vrc7?1:0);
+    OPLL_resetPatch(fm_emu,vrc7?1:nukedToEmuPatch[patchSet&3]);
+    OPLL_setMask(fm_emu,
+      (isMuted[0]?1:0)|
+      (isMuted[1]?2:0)|
+      (isMuted[2]?4:0)|
+      (isMuted[3]?8:0)|
+      (isMuted[4]?16:0)|
+      (isMuted[5]?32:0)|
+      (isMuted[6]?64:0)|
+      (isMuted[7]?128:0)|
+      (isMuted[8]?256:0)
+    );
+  }
   for (int i=0; i<11; i++) {
     chan[i]=DivPlatformOPLL::Channel();
     chan[i].std.setEngine(parent);
@@ -896,15 +1100,17 @@ void DivPlatformOPLL::reset() {
   drumState=0;
   lastCustomMemory=-1;
 
-  drumVol[0]=0;
-  drumVol[1]=0;
-  drumVol[2]=0;
-  drumVol[3]=0;
-  drumVol[4]=0;
+  for (int i=0; i<5; i++) {
+    drumVol[i]=0;
+    drumActivated[i]=true;
+  }
   
   delay=0;
-  drums=false;
+  crapDrums=false;
   properDrums=properDrumsSys;
+
+  lastFreqSH=-1;
+  lastFreqTT=-1;
 
   if (properDrums) {
     immWrite(0x0e,0x20);
@@ -919,6 +1125,10 @@ bool DivPlatformOPLL::keyOffAffectsPorta(int ch) {
   return false;
 }
 
+bool DivPlatformOPLL::getLegacyAlwaysSetVolume() {
+  return false;
+}
+
 void DivPlatformOPLL::notifyInsChange(int ins) {
   for (int i=0; i<11; i++) {
     if (chan[i].ins==ins) {
@@ -928,6 +1138,9 @@ void DivPlatformOPLL::notifyInsChange(int ins) {
 }
 
 void DivPlatformOPLL::notifyInsDeletion(void* ins) {
+  for (int i=0; i<11; i++) {
+    chan[i].std.notifyInsDeletion((DivInstrument*)ins);
+  }
 }
 
 void DivPlatformOPLL::poke(unsigned int addr, unsigned short val) {
@@ -942,32 +1155,58 @@ int DivPlatformOPLL::getPortaFloor(int ch) {
   return (ch>5)?12:0;
 }
 
-void DivPlatformOPLL::setYMFM(bool use) {
-  useYMFM=use;
+void DivPlatformOPLL::setCore(unsigned char which) {
+  selCore=which;
 }
 
-void DivPlatformOPLL::setFlags(unsigned int flags) {
-  if ((flags&15)==3) {
+float DivPlatformOPLL::getPostAmp() {
+  return 1.5f;
+}
+
+void DivPlatformOPLL::setFlags(const DivConfig& flags) {
+  int clockSel=flags.getInt("clockSel",0);
+  if (clockSel==3) {
     chipClock=COLOR_NTSC/2.0;
-  } else if ((flags&15)==2) {
+  } else if (clockSel==2) {
     chipClock=4000000.0;
-  } else if ((flags&15)==1) {
+  } else if (clockSel==1) {
     chipClock=COLOR_PAL*4.0/5.0;
   } else {
     chipClock=COLOR_NTSC;
   }
-  rate=chipClock/36;
-  patchSet=flags>>4;
-  for (int i=0; i<11; i++) {
-    oscBuf[i]->rate=rate/2;
+  CHECK_CUSTOM_CLOCK;
+  patchSet=flags.getInt("patchSet",0);
+  if (selCore==1) {
+    rate=chipClock/72;
+  } else {
+    rate=chipClock/36;
   }
+  for (int i=0; i<11; i++) {
+    if (selCore==1) {
+      oscBuf[i]->rate=rate;
+    } else {
+      if (i>=6 && properDrumsSys) {
+        oscBuf[i]->rate=rate;
+      } else {
+        oscBuf[i]->rate=rate/2;
+      }
+    }
+  }
+  noTopHatFreq=flags.getBool("noTopHatFreq",false);
+  fixedAll=flags.getBool("fixedAll",true);
 }
 
-int DivPlatformOPLL::init(DivEngine* p, int channels, int sugRate, unsigned int flags) {
+int DivPlatformOPLL::init(DivEngine* p, int channels, int sugRate, const DivConfig& flags) {
   parent=p;
   dumpWrites=false;
   skipRegisterWrites=false;
   patchSet=0;
+  fm_emu=NULL;
+  if (selCore==1) {
+    fm_emu=OPLL_new(72,1);
+    OPLL_setChipType(fm_emu,vrc7?1:0);
+  }
+  
   for (int i=0; i<11; i++) {
     isMuted[i]=false;
     oscBuf[i]=new DivDispatchOscBuffer;
@@ -981,6 +1220,10 @@ int DivPlatformOPLL::init(DivEngine* p, int channels, int sugRate, unsigned int 
 void DivPlatformOPLL::quit() {
   for (int i=0; i<11; i++) {
     delete oscBuf[i];
+  }
+  if (fm_emu!=NULL) {
+    OPLL_delete(fm_emu);
+    fm_emu=NULL;
   }
 }
 

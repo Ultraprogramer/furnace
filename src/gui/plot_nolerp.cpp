@@ -1,6 +1,6 @@
 /**
  * Furnace Tracker - multi-system chiptune tracker
- * Copyright (C) 2021-2022 tildearrow and contributors
+ * Copyright (C) 2021-2024 tildearrow and contributors
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -19,11 +19,11 @@
 
 // portions based on imgui_widgets.cpp
 
-#include "plot_nolerp.h"
-#include "imgui.h"
 #ifndef IMGUI_DEFINE_MATH_OPERATORS
 #define IMGUI_DEFINE_MATH_OPERATORS
 #endif
+#include "plot_nolerp.h"
+#include "imgui.h"
 #include "imgui_internal.h"
 
 struct FurnacePlotArrayGetterData
@@ -76,9 +76,9 @@ int PlotNoLerpEx(ImGuiPlotType plot_type, const char* label, float (*values_gett
     const ImRect inner_bb(frame_bb.Min + style.FramePadding, frame_bb.Max - style.FramePadding);
     const ImRect total_bb(frame_bb.Min, frame_bb.Max + ImVec2(label_size.x > 0.0f ? style.ItemInnerSpacing.x + label_size.x : 0.0f, 0));
     ImGui::ItemSize(total_bb, style.FramePadding.y);
-    if (!ImGui::ItemAdd(total_bb, 0, &frame_bb))
+    if (!ImGui::ItemAdd(total_bb, 0, &frame_bb, ImGuiItemFlags_NoInertialScroll))
         return -1;
-    const bool hovered = ImGui::ItemHoverable(frame_bb, id);
+    const bool hovered = ImGui::ItemHoverable(frame_bb, id, 0);
 
     // Determine scale from values if not specified
     if (scale_min == FLT_MAX || scale_max == FLT_MAX)
@@ -183,7 +183,7 @@ void PlotNoLerp(const char* label, const float* values, int values_count, int va
     PlotNoLerpEx(ImGuiPlotType_Lines, label, &Plot_ArrayGetter, (void*)&data, values_count, values_offset, overlay_text, scale_min, scale_max, graph_size);
 }
 
-int PlotBitfieldEx(const char* label, int (*values_getter)(void* data, int idx), void* data, int values_count, int values_offset, const char** overlay_text, int bits, ImVec2 frame_size, const bool* values_highlight, ImVec4 highlightColor)
+int PlotBitfieldEx(const char* label, int (*values_getter)(void* data, int idx), void* data, int values_count, int values_offset, const char** overlay_text, int bits, ImVec2 frame_size, const bool* values_highlight, ImVec4 highlightColor, ImVec4 color)
 {
     ImGuiContext& g = *GImGui;
     ImGuiWindow* window = ImGui::GetCurrentWindow();
@@ -203,9 +203,9 @@ int PlotBitfieldEx(const char* label, int (*values_getter)(void* data, int idx),
     const ImRect inner_bb(frame_bb.Min + style.FramePadding, frame_bb.Max - style.FramePadding);
     const ImRect total_bb(frame_bb.Min, frame_bb.Max + ImVec2(label_size.x > 0.0f ? style.ItemInnerSpacing.x + label_size.x : 0.0f, 0));
     ImGui::ItemSize(total_bb, style.FramePadding.y);
-    if (!ImGui::ItemAdd(total_bb, 0, &frame_bb))
+    if (!ImGui::ItemAdd(total_bb, 0, &frame_bb, ImGuiItemFlags_NoInertialScroll))
         return -1;
-    const bool hovered = ImGui::ItemHoverable(frame_bb, id);
+    const bool hovered = ImGui::ItemHoverable(frame_bb, id, 0);
 
     ImGui::RenderFrame(frame_bb.Min, frame_bb.Max, ImGui::GetColorU32(ImGuiCol_FrameBg), true, style.FrameRounding);
 
@@ -232,8 +232,8 @@ int PlotBitfieldEx(const char* label, int (*values_getter)(void* data, int idx),
 
         float t0 = 0.0f;
         ImVec2 tp0 = ImVec2( t0, 0.0f );                       // Point in the normalized space of our target rectangle
-        const ImU32 col_base = ImGui::GetColorU32(ImGuiCol_PlotHistogram);
-        const ImU32 col_hovered = ImGui::GetColorU32(ImGuiCol_PlotHistogramHovered);
+        const ImU32 col_base = ImGui::GetColorU32(color);
+        const ImU32 col_hovered = ImGui::GetColorU32(color);
 
         for (int n = 0; n < res_w; n++)
         {
@@ -287,10 +287,10 @@ int PlotBitfieldEx(const char* label, int (*values_getter)(void* data, int idx),
     return idx_hovered;
 }
 
-void PlotBitfield(const char* label, const int* values, int values_count, int values_offset, const char** overlay_text, int bits, ImVec2 graph_size, int stride, const bool* values_highlight, ImVec4 highlightColor)
+void PlotBitfield(const char* label, const int* values, int values_count, int values_offset, const char** overlay_text, int bits, ImVec2 graph_size, int stride, const bool* values_highlight, ImVec4 highlightColor, ImVec4 color)
 {
     FurnacePlotIntArrayGetterData data(values, stride);
-    PlotBitfieldEx(label, &Plot_IntArrayGetter, (void*)&data, values_count, values_offset, overlay_text, bits, graph_size, values_highlight, highlightColor);
+    PlotBitfieldEx(label, &Plot_IntArrayGetter, (void*)&data, values_count, values_offset, overlay_text, bits, graph_size, values_highlight, highlightColor, color);
 }
 
 int PlotCustomEx(ImGuiPlotType plot_type, const char* label, float (*values_getter)(void* data, int idx), void* data, int values_count, int values_display_offset, const char* overlay_text, float scale_min, float scale_max, ImVec2 frame_size, ImVec4 color, int highlight, std::string (*hoverFunc)(int,float,void*), void* hoverFuncUser, bool blockMode, std::string (*guideFunc)(float), const bool* values_highlight, ImVec4 highlightColor)
@@ -313,9 +313,9 @@ int PlotCustomEx(ImGuiPlotType plot_type, const char* label, float (*values_gett
     const ImRect inner_bb(frame_bb.Min + style.FramePadding, frame_bb.Max - style.FramePadding);
     const ImRect total_bb(frame_bb.Min, frame_bb.Max + ImVec2(label_size.x > 0.0f ? style.ItemInnerSpacing.x + label_size.x : 0.0f, 0));
     ImGui::ItemSize(total_bb, style.FramePadding.y);
-    if (!ImGui::ItemAdd(total_bb, 0, &frame_bb))
+    if (!ImGui::ItemAdd(total_bb, 0, &frame_bb, ImGuiItemFlags_NoInertialScroll))
         return -1;
-    const bool hovered = ImGui::ItemHoverable(frame_bb, id);
+    const bool hovered = ImGui::ItemHoverable(frame_bb, id, 0);
 
     // Determine scale from values if not specified
     if (scale_min == FLT_MAX || scale_max == FLT_MAX)
@@ -367,7 +367,7 @@ int PlotCustomEx(ImGuiPlotType plot_type, const char* label, float (*values_gett
               if (plot_type == ImGuiPlotType_Lines)
                   ImGui::SetTooltip("%d: %8.4g\n%d: %8.4g", v_idx, v0, v_idx + 1, v1);
               else if (plot_type == ImGuiPlotType_Histogram)
-                  ImGui::SetTooltip("%d: %8.4g", v_idx+values_display_offset, v0);
+                  ImGui::SetTooltip("%d: %d", v_idx+values_display_offset, (int)v0);
             }
             idx_hovered = v_idx;
         }
@@ -393,6 +393,8 @@ int PlotCustomEx(ImGuiPlotType plot_type, const char* label, float (*values_gett
         if (blockMode) {
           window->DrawList->AddLine(ImLerp(inner_bb.Min,inner_bb.Max,ImVec2(0.0f,histogram_zero_line_t)),ImLerp(inner_bb.Min,inner_bb.Max,ImVec2(1.0f,histogram_zero_line_t)),col_base);
         }
+
+        ImVec2 chevron[3];
 
         for (int n = 0; n < res_w; n++)
         {
@@ -421,11 +423,30 @@ int PlotCustomEx(ImGuiPlotType plot_type, const char* label, float (*values_gett
                 if (values_highlight!=NULL) {
                   if (values_highlight[v1_idx]) rCol=ImGui::GetColorU32(highlightColor);
                 }
-                window->DrawList->AddRectFilled(pos0, pos1, rCol);
+                if (blockMode) {
+                  if ((int)v0>=(int)(scale_max+0.5)) {
+                    float chScale=(pos1.x-pos0.x)*0.125;
+                    chevron[0]=ImVec2(pos0.x+(pos1.x-pos0.x)*0.25,pos1.y+4.0f*chScale);
+                    chevron[1]=ImVec2(pos0.x+(pos1.x-pos0.x)*0.5,pos1.y+2.0f*chScale);
+                    chevron[2]=ImVec2(pos0.x+(pos1.x-pos0.x)*0.75,pos1.y+4.0f*chScale);
+                    window->DrawList->AddPolyline(chevron, 3, rCol, 0, chScale);
+                  } else if ((int)v0<(int)(scale_min)) {
+                    float chScale=(pos1.x-pos0.x)*0.125;
+                    chevron[0]=ImVec2(pos0.x+(pos1.x-pos0.x)*0.25,pos1.y-4.0f*chScale);
+                    chevron[1]=ImVec2(pos0.x+(pos1.x-pos0.x)*0.5,pos1.y-2.0f*chScale);
+                    chevron[2]=ImVec2(pos0.x+(pos1.x-pos0.x)*0.75,pos1.y-4.0f*chScale);
+                    window->DrawList->AddPolyline(chevron, 3, rCol, 0, chScale);
+                  } else {
+                    window->DrawList->AddRectFilled(pos0, pos1, rCol);
+                  }
+                } else {
+                  window->DrawList->AddRectFilled(pos0, pos1, rCol);
+                }
             }
 
             t0 = t1;
             tp0 = tp1;
+            v0 = v1;
         }
     }
 

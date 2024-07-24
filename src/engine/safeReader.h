@@ -1,6 +1,6 @@
 /**
  * Furnace Tracker - multi-system chiptune tracker
- * Copyright (C) 2021-2022 tildearrow and contributors
+ * Copyright (C) 2021-2024 tildearrow and contributors
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -29,6 +29,13 @@ enum Endianness {
   BigEndian
 };
 
+enum DivStringEncoding {
+  DIV_ENCODING_NONE=0,
+  DIV_ENCODING_UTF8,
+  DIV_ENCODING_LATIN1,
+  DIV_ENCODING_SHIFT_JIS
+};
+
 class SafeReader;
 
 struct EndOfFileException {
@@ -40,7 +47,7 @@ struct EndOfFileException {
 };
 
 class SafeReader {
-  unsigned char* buf;
+  const unsigned char* buf;
   size_t len;
 
   size_t curSeek;
@@ -64,15 +71,19 @@ class SafeReader {
     float readF_BE();
     double readD();
     double readD_BE();
+    String readStringWithEncoding(DivStringEncoding encoding);
+    String readStringWithEncoding(DivStringEncoding encoding, size_t len);
     String readString();
     String readString(size_t len);
+    String readStringLatin1();
+    String readStringLatin1(size_t len);
     String readStringLine();
     String readStringToken(unsigned char delim, bool stripContiguous);
     String readStringToken();
     inline bool isEOF() { return curSeek >= len; };
 
-    SafeReader(void* b, size_t l):
-      buf((unsigned char*)b),
+    SafeReader(const void* b, size_t l):
+      buf((const unsigned char*)b),
       len(l),
       curSeek(0) {}
 };

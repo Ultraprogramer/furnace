@@ -1,6 +1,6 @@
 /**
  * Furnace Tracker - multi-system chiptune tracker
- * Copyright (C) 2021-2022 tildearrow and contributors
+ * Copyright (C) 2021-2024 tildearrow and contributors
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -39,12 +39,12 @@ const char** DivPlatformBubSysWSG::getRegisterSheet() {
   return regCheatSheetBubSysWSG;
 }
 
-void DivPlatformBubSysWSG::acquire(short* bufL, short* bufR, size_t start, size_t len) {
+void DivPlatformBubSysWSG::acquire(short** buf, size_t len) {
   int chanOut=0;
-  for (size_t h=start; h<start+len; h++) {
+  for (size_t h=0; h<len; h++) {
     signed int out=0;
     // K005289 part
-    k005289->tick();
+    k005289.tick(coreQuality);
 
     // Wavetable part
     for (int i=0; i<2; i++) {
@@ -52,7 +52,7 @@ void DivPlatformBubSysWSG::acquire(short* bufL, short* bufR, size_t start, size_
         oscBuf[i]->data[oscBuf[i]->needle++]=0;
         continue;
       } else {
-        chanOut=chan[i].waveROM[k005289->addr(i)]*(regPool[2+i]&0xf);
+        chanOut=chan[i].waveROM[k005289.addr(i)]*(regPool[2+i]&0xf);
         out+=chanOut;
         if (writeOscBuf==0) {
           oscBuf[i]->data[oscBuf[i]->needle++]=chanOut<<7;
@@ -60,7 +60,7 @@ void DivPlatformBubSysWSG::acquire(short* bufL, short* bufR, size_t start, size_
       }
     }
 
-    if (++writeOscBuf>=64) writeOscBuf=0;
+    if (++writeOscBuf>=8) writeOscBuf=0;
 
     out<<=6; // scale output to 16 bit
 
@@ -68,7 +68,7 @@ void DivPlatformBubSysWSG::acquire(short* bufL, short* bufR, size_t start, size_
     if (out>32767) out=32767;
 
     //printf("out: %d\n",out);
-    bufL[h]=bufR[h]=out;
+    buf[0][h]=out;
   }
 }
 
@@ -90,7 +90,9 @@ void DivPlatformBubSysWSG::tick(bool sysTick) {
       chan[i].outVol=((chan[i].vol&15)*MIN(15,chan[i].std.vol.val))/15;
       rWrite(2+i,(chan[i].wave<<5)|chan[i].outVol);
     }
-    if (chan[i].std.arp.had) {
+    if (NEW_ARP_STRAT) {
+      chan[i].handleArp();
+    } else if (chan[i].std.arp.had) {
       if (!chan[i].inPorta) {
         chan[i].baseFreq=NOTE_PERIODIC(parent->calcArp(chan[i].note,chan[i].std.arp.val));
       }
@@ -119,12 +121,12 @@ void DivPlatformBubSysWSG::tick(bool sysTick) {
     }
     if (chan[i].freqChanged || chan[i].keyOn || chan[i].keyOff) {
       //DivInstrument* ins=parent->getIns(chan[i].ins,DIV_INS_SCC);
-      chan[i].freq=0x1000-parent->calcFreq(chan[i].baseFreq,chan[i].pitch,true,0,chan[i].pitch2,chipClock,CHIP_DIVIDER);
+      chan[i].freq=0x1000-parent->calcFreq(chan[i].baseFreq,chan[i].pitch,chan[i].fixedArp?chan[i].baseNoteOverride:chan[i].arpOff,chan[i].fixedArp,true,0,chan[i].pitch2,chipClock,CHIP_DIVIDER);
       if (chan[i].freq<0) chan[i].freq=0;
       if (chan[i].freq>4095) chan[i].freq=4095;
-      k005289->load(i,chan[i].freq);
+      k005289.load(i,chan[i].freq);
       rWrite(i,chan[i].freq);
-      k005289->update(i);
+      k005289.update(i);
       if (chan[i].keyOn) {
         // ???
       }
@@ -224,7 +226,7 @@ int DivPlatformBubSysWSG::dispatch(DivCommand c) {
       break;
     }
     case DIV_CMD_LEGATO:
-      chan[c.chan].baseFreq=NOTE_PERIODIC(c.value+((chan[c.chan].std.arp.will && !chan[c.chan].std.arp.mode)?(chan[c.chan].std.arp.val):(0)));
+      chan[c.chan].baseFreq=NOTE_PERIODIC(c.value+((HACKY_LEGATO_MESS)?(chan[c.chan].std.arp.val):(0)));
       chan[c.chan].freqChanged=true;
       chan[c.chan].note=c.value;
       break;
@@ -232,14 +234,20 @@ int DivPlatformBubSysWSG::dispatch(DivCommand c) {
       if (chan[c.chan].active && c.value2) {
         if (parent->song.resetMacroOnPorta) chan[c.chan].macroInit(parent->getIns(chan[c.chan].ins,DIV_INS_SCC));
       }
-      if (!chan[c.chan].inPorta && c.value && !parent->song.brokenPortaArp && chan[c.chan].std.arp.will) chan[c.chan].baseFreq=NOTE_PERIODIC(chan[c.chan].note);
+      if (!chan[c.chan].inPorta && c.value && !parent->song.brokenPortaArp && chan[c.chan].std.arp.will && !NEW_ARP_STRAT) chan[c.chan].baseFreq=NOTE_PERIODIC(chan[c.chan].note);
       chan[c.chan].inPorta=c.value;
       break;
     case DIV_CMD_GET_VOLMAX:
       return 15;
       break;
-    case DIV_ALWAYS_SET_VOLUME:
-      return 1;
+    case DIV_CMD_MACRO_OFF:
+      chan[c.chan].std.mask(c.value,true);
+      break;
+    case DIV_CMD_MACRO_ON:
+      chan[c.chan].std.mask(c.value,false);
+      break;
+    case DIV_CMD_MACRO_RESTART:
+      chan[c.chan].std.restart(c.value);
       break;
     default:
       break;
@@ -295,11 +303,11 @@ void DivPlatformBubSysWSG::reset() {
   if (dumpWrites) {
     addWrite(0xffffffff,0);
   }
-  k005289->reset();
+  k005289.reset();
 }
 
-bool DivPlatformBubSysWSG::isStereo() {
-  return false;
+int DivPlatformBubSysWSG::getOutputCount() {
+  return 1;
 }
 
 bool DivPlatformBubSysWSG::keyOffAffectsArp(int ch) {
@@ -321,11 +329,12 @@ void DivPlatformBubSysWSG::notifyInsDeletion(void* ins) {
   }
 }
 
-void DivPlatformBubSysWSG::setFlags(unsigned int flags) {
+void DivPlatformBubSysWSG::setFlags(const DivConfig& flags) {
   chipClock=COLOR_NTSC;
-  rate=chipClock;
+  CHECK_CUSTOM_CLOCK;
+  rate=chipClock/coreQuality;
   for (int i=0; i<2; i++) {
-    oscBuf[i]->rate=rate/64;
+    oscBuf[i]->rate=rate/8;
   }
 }
 
@@ -337,7 +346,33 @@ void DivPlatformBubSysWSG::poke(std::vector<DivRegWrite>& wlist) {
   for (DivRegWrite& i: wlist) rWrite(i.addr,i.val);
 }
 
-int DivPlatformBubSysWSG::init(DivEngine* p, int channels, int sugRate, unsigned int flags) {
+void DivPlatformBubSysWSG::setCoreQuality(unsigned char q) {
+  switch (q) {
+    case 0:
+      coreQuality=64;
+      break;
+    case 1:
+      coreQuality=32;
+      break;
+    case 2:
+      coreQuality=16;
+      break;
+    case 3:
+      coreQuality=8;
+      break;
+    case 4:
+      coreQuality=4;
+      break;
+    case 5:
+      coreQuality=1;
+      break;
+    default:
+      coreQuality=8;
+      break;
+  }
+}
+
+int DivPlatformBubSysWSG::init(DivEngine* p, int channels, int sugRate, const DivConfig& flags) {
   parent=p;
   dumpWrites=false;
   skipRegisterWrites=false;
@@ -347,7 +382,6 @@ int DivPlatformBubSysWSG::init(DivEngine* p, int channels, int sugRate, unsigned
     oscBuf[i]=new DivDispatchOscBuffer;
   }
   setFlags(flags);
-  k005289=new k005289_core();
   reset();
   return 2;
 }
@@ -356,7 +390,6 @@ void DivPlatformBubSysWSG::quit() {
   for (int i=0; i<2; i++) {
     delete oscBuf[i];
   }
-  delete k005289;
 }
 
 DivPlatformBubSysWSG::~DivPlatformBubSysWSG() {

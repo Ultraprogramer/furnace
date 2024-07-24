@@ -1,6 +1,6 @@
 /**
  * Furnace Tracker - multi-system chiptune tracker
- * Copyright (C) 2021-2022 tildearrow and contributors
+ * Copyright (C) 2021-2024 tildearrow and contributors
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -18,7 +18,7 @@
  */
 
 #include "gui.h"
-
+#include "../ta-log.h"
 #include "actionUtil.h"
 
 void FurnaceGUI::startSelection(int xCoarse, int xFine, int y, bool fullRow) {
@@ -50,8 +50,10 @@ void FurnaceGUI::startSelection(int xCoarse, int xFine, int y, bool fullRow) {
       selecting=true;
       selectingFull=false;
       dragSourceX=xCoarse;
+      dragSourceXFine=xFine;
       dragSourceY=y;
       dragDestinationX=xCoarse;
+      dragDestinationXFine=xFine;
       dragDestinationY=y;
       dragStart=selStart;
       dragEnd=selEnd;
@@ -86,6 +88,7 @@ void FurnaceGUI::updateSelection(int xCoarse, int xFine, int y, bool fullRow) {
   if (!selecting) return;
   if (dragging) {
     dragDestinationX=xCoarse;
+    if (dragStart.xFine>=3 && dragStart.xCoarse==dragEnd.xCoarse) dragDestinationXFine=(dragSourceXFine&1)?((xFine-1)|1):((xFine+1)&(~1));
     dragDestinationY=y;
     cursorDrag.xCoarse=xCoarse;
     cursorDrag.xFine=xFine;
@@ -104,6 +107,15 @@ void FurnaceGUI::updateSelection(int xCoarse, int xFine, int y, bool fullRow) {
       dragDestinationX=lastChannel-(dragEnd.xCoarse-dragSourceX)-1;
     }
 
+    if (dragStart.xFine>=3 && dragStart.xCoarse==dragEnd.xCoarse) {
+      if (dragEnd.xFine+(dragDestinationXFine-dragSourceXFine)>(2+e->curPat[dragDestinationX].effectCols*2)) {
+        dragDestinationXFine=(2+e->curPat[dragDestinationX].effectCols*2)-dragEnd.xFine+dragSourceXFine;
+      }
+      if (dragStart.xFine+(dragDestinationXFine-dragSourceXFine)<3) {
+        dragDestinationXFine=3-dragStart.xFine+dragSourceXFine;
+      } 
+    }
+
     if (dragStart.y+(dragDestinationY-dragSourceY)<0) {
       dragDestinationY=dragSourceY-dragStart.y;
     }
@@ -113,10 +125,10 @@ void FurnaceGUI::updateSelection(int xCoarse, int xFine, int y, bool fullRow) {
     }
 
     selStart.xCoarse=dragStart.xCoarse+(dragDestinationX-dragSourceX);
-    selStart.xFine=dragStart.xFine;
+    selStart.xFine=dragStart.xFine+(dragDestinationXFine-dragSourceXFine);
     selStart.y=dragStart.y+(dragDestinationY-dragSourceY);
     selEnd.xCoarse=dragEnd.xCoarse+(dragDestinationX-dragSourceX);
-    selEnd.xFine=dragEnd.xFine;
+    selEnd.xFine=dragEnd.xFine+(dragDestinationXFine-dragSourceXFine);
     selEnd.y=dragEnd.y+(dragDestinationY-dragSourceY);
   } else {
     if (selectingFull) {
@@ -156,7 +168,7 @@ void FurnaceGUI::finishSelection() {
   selectingFull=false;
 
   if (dragging) {
-    if (dragSourceX==dragDestinationX && dragSourceY==dragDestinationY) {
+    if (dragSourceX==dragDestinationX && dragSourceY==dragDestinationY && dragSourceXFine==dragDestinationXFine) {
       cursor=cursorDrag;
       selStart=cursorDrag;
       selEnd=cursorDrag;
@@ -187,8 +199,10 @@ void FurnaceGUI::finishSelection() {
     selStart.xFine=0;
   }
   if (e->curSubSong->chanCollapse[selEnd.xCoarse] && selEnd.xFine>=(3-e->curSubSong->chanCollapse[selEnd.xCoarse])) {
-    selEnd.xFine=2+e->curPat[cursor.xCoarse].effectCols*2;
+    selEnd.xFine=2+e->curPat[selEnd.xCoarse].effectCols*2;
   }
+
+  logV(_("finish selection: %d.%d,%d - %d.%d,%d"),selStart.xCoarse,selStart.xFine,selStart.y,selEnd.xCoarse,selEnd.xFine,selEnd.y);
 
   e->setMidiBaseChan(cursor.xCoarse);
 }
@@ -257,9 +271,15 @@ void FurnaceGUI::moveCursor(int x, int y, bool select) {
         if (cursor.y>=e->curSubSong->patLen) {
           if (settings.wrapVertical!=0 && !select) {
             cursor.y=0;
-            if (settings.wrapVertical==2) {
-              if ((!e->isPlaying() || !followPattern) && curOrder<(e->curSubSong->ordersLen-1)) {
-                setOrder(curOrder+1);
+            if (settings.wrapVertical>1) {
+              if (!e->isPlaying() || !followPattern) {
+                if (curOrder<(e->curSubSong->ordersLen-1)) {
+                  setOrder(curOrder+1);
+                } else if (settings.wrapVertical==3) {
+                  setOrder(0);
+                } else {
+                  cursor.y=e->curSubSong->patLen-1;
+                }
               } else {
                 cursor.y=e->curSubSong->patLen-1;
               }
@@ -275,9 +295,15 @@ void FurnaceGUI::moveCursor(int x, int y, bool select) {
         if (cursor.y<0) {
           if (settings.wrapVertical!=0 && !select) {
             cursor.y=e->curSubSong->patLen-1;
-            if (settings.wrapVertical==2) {
-              if ((!e->isPlaying() || !followPattern) && curOrder>0) {
-                setOrder(curOrder-1);
+            if (settings.wrapVertical>1) {
+              if (!e->isPlaying() || !followPattern) {
+                if (curOrder>0) {
+                  setOrder(curOrder-1);
+                } else if (settings.wrapVertical==3) {
+                  setOrder(e->curSubSong->ordersLen-1);
+                } else {
+                  cursor.y=0;
+                }
               } else {
                 cursor.y=0;
               }
@@ -318,6 +344,10 @@ void FurnaceGUI::moveCursorPrevChannel(bool overflow) {
   }
   e->setMidiBaseChan(cursor.xCoarse);
 
+  int xFineMax=(e->curSubSong->chanCollapse[cursor.xCoarse]?(4-e->curSubSong->chanCollapse[cursor.xCoarse]):(3+e->curPat[cursor.xCoarse].effectCols*2));
+  if (cursor.xFine<0) cursor.xFine=0;
+  if (cursor.xFine>=xFineMax) cursor.xFine=xFineMax-1;
+
   selStart=cursor;
   selEnd=cursor;
   demandScrollX=true;
@@ -342,13 +372,19 @@ void FurnaceGUI::moveCursorNextChannel(bool overflow) {
   }
   e->setMidiBaseChan(cursor.xCoarse);
 
+  int xFineMax=(e->curSubSong->chanCollapse[cursor.xCoarse]?(4-e->curSubSong->chanCollapse[cursor.xCoarse]):(3+e->curPat[cursor.xCoarse].effectCols*2));
+  if (cursor.xFine<0) cursor.xFine=0;
+  if (cursor.xFine>=xFineMax) cursor.xFine=xFineMax-1;
+
   selStart=cursor;
   selEnd=cursor;
   demandScrollX=true;
 }
 
 void FurnaceGUI::moveCursorTop(bool select) {
-  finishSelection();
+  if (!select) {
+    finishSelection();
+  }
   curNibble=false;
   if (cursor.y==0) {
     DETERMINE_FIRST;
@@ -358,16 +394,18 @@ void FurnaceGUI::moveCursorTop(bool select) {
   } else {
     cursor.y=0;
   }
-  selStart=cursor;
   if (!select) {
-    selEnd=cursor;
+    selStart=cursor;
   }
+  selEnd=cursor;
   e->setMidiBaseChan(cursor.xCoarse);
   updateScroll(cursor.y);
 }
 
 void FurnaceGUI::moveCursorBottom(bool select) {
-  finishSelection();
+  if (!select) {
+    finishSelection();
+  }
   curNibble=false;
   if (cursor.y==e->curSubSong->patLen-1) {
     DETERMINE_LAST;

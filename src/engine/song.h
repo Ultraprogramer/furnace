@@ -1,6 +1,6 @@
 /**
  * Furnace Tracker - multi-system chiptune tracker
- * Copyright (C) 2021-2022 tildearrow and contributors
+ * Copyright (C) 2021-2024 tildearrow and contributors
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -20,11 +20,11 @@
 #ifndef _SONG_H
 #define _SONG_H
 #include <stdio.h>
-#include <vector>
+#include "../pch.h"
 
-#define DIV_MAX_CHANS 128
-
+#include "defines.h"
 #include "../ta-utils.h"
+#include "config.h"
 #include "orders.h"
 #include "instrument.h"
 #include "pattern.h"
@@ -64,10 +64,10 @@ enum DivSystem {
   DIV_SYSTEM_FDS,
   DIV_SYSTEM_MMC5,
   DIV_SYSTEM_N163,
-  DIV_SYSTEM_OPN,
-  DIV_SYSTEM_OPN_EXT,
-  DIV_SYSTEM_PC98,
-  DIV_SYSTEM_PC98_EXT,
+  DIV_SYSTEM_YM2203,
+  DIV_SYSTEM_YM2203_EXT,
+  DIV_SYSTEM_YM2608,
+  DIV_SYSTEM_YM2608_EXT,
   DIV_SYSTEM_OPL,
   DIV_SYSTEM_OPL2,
   DIV_SYSTEM_OPL3,
@@ -83,6 +83,7 @@ enum DivSystem {
   DIV_SYSTEM_VRC7,
   DIV_SYSTEM_YM2610B,
   DIV_SYSTEM_SFX_BEEPER,
+  DIV_SYSTEM_SFX_BEEPER_QUADTONE,
   DIV_SYSTEM_YM2612_EXT,
   DIV_SYSTEM_SCC,
   DIV_SYSTEM_OPL_DRUMS,
@@ -111,21 +112,60 @@ enum DivSystem {
   DIV_SYSTEM_NAMCO,
   DIV_SYSTEM_NAMCO_15XX,
   DIV_SYSTEM_NAMCO_CUS30,
-  DIV_SYSTEM_YM2612_FRAC,
-  DIV_SYSTEM_YM2612_FRAC_EXT,
-  DIV_SYSTEM_RESERVED_8,
+  DIV_SYSTEM_YM2612_DUALPCM,
+  DIV_SYSTEM_YM2612_DUALPCM_EXT,
+  DIV_SYSTEM_MSM5232,
   DIV_SYSTEM_T6W28,
+  DIV_SYSTEM_K007232,
+  DIV_SYSTEM_GA20,
   DIV_SYSTEM_PCM_DAC,
-  DIV_SYSTEM_DUMMY
+  DIV_SYSTEM_PONG,
+  DIV_SYSTEM_DUMMY,
+  DIV_SYSTEM_YM2612_CSM,
+  DIV_SYSTEM_YM2610_CSM,
+  DIV_SYSTEM_YM2610B_CSM,
+  DIV_SYSTEM_YM2203_CSM,
+  DIV_SYSTEM_YM2608_CSM,
+  DIV_SYSTEM_SM8521,
+  DIV_SYSTEM_PV1000,
+  DIV_SYSTEM_K053260,
+  DIV_SYSTEM_TED,
+  DIV_SYSTEM_C140,
+  DIV_SYSTEM_C219,
+  DIV_SYSTEM_ESFM,
+  DIV_SYSTEM_POWERNOISE,
+  DIV_SYSTEM_DAVE,
+  DIV_SYSTEM_NDS,
+  DIV_SYSTEM_GBA_DMA,
+  DIV_SYSTEM_GBA_MINMOD,
+  DIV_SYSTEM_5E01,
+  DIV_SYSTEM_BIFURCATOR,
+  DIV_SYSTEM_SID2,
+};
+
+enum DivEffectType: unsigned short {
+  DIV_EFFECT_NULL=0,
+  DIV_EFFECT_DUMMY,
+  DIV_EFFECT_EXTERNAL,
+  DIV_EFFECT_VOLUME,
+  DIV_EFFECT_FILTER
+};
+
+struct DivGroovePattern {
+  unsigned char val[16];
+  unsigned char len;
+  DivGroovePattern():
+    len(1) {
+      memset(val,6,16);
+    }
 };
 
 struct DivSubSong {
   String name, notes;
   unsigned char hilightA, hilightB;
-  unsigned char timeBase, speed1, speed2, arpLen;
+  unsigned char timeBase, arpLen;
+  DivGroovePattern speeds;
   short virtualTempoN, virtualTempoD;
-  bool pal;
-  bool customTempo;
   float hz;
   int patLen, ordersLen;
 
@@ -133,301 +173,76 @@ struct DivSubSong {
   DivChannelData pat[DIV_MAX_CHANS];
 
   bool chanShow[DIV_MAX_CHANS];
+  bool chanShowChanOsc[DIV_MAX_CHANS];
   unsigned char chanCollapse[DIV_MAX_CHANS];
   String chanName[DIV_MAX_CHANS];
   String chanShortName[DIV_MAX_CHANS];
 
+  /**
+   * walk through the song and determine loop position.
+   */
+  bool walk(int& loopOrder, int& loopRow, int& loopEnd, int chans, int jumpTreatment, int ignoreJumpAtEnd, int firstPat=0);
+
   void clearData();
   void optimizePatterns();
   void rearrangePatterns();
+  void sortOrders();
+  void makePatUnique();
 
   DivSubSong(): 
     hilightA(4),
     hilightB(16),
     timeBase(0),
-    speed1(6),
-    speed2(6),
     arpLen(1),
     virtualTempoN(150),
     virtualTempoD(150),
-    pal(true),
-    customTempo(false),
     hz(60.0),
     patLen(64),
     ordersLen(1) {
     for (int i=0; i<DIV_MAX_CHANS; i++) {
       chanShow[i]=true;
+      chanShowChanOsc[i]=true;
       chanCollapse[i]=0;
     }
   }
 };
 
+struct DivAssetDir {
+  String name;
+  std::vector<int> entries;
+
+  DivAssetDir():
+    name("New Directory") {}
+  DivAssetDir(String n):
+    name(n) {}
+};
+
+struct DivEffectStorage {
+  DivEffectType id;
+  unsigned short slot, storageVer;
+  float dryWet;
+  unsigned char* storage;
+  size_t storageLen;
+  DivEffectStorage():
+    id(DIV_EFFECT_NULL),
+    slot(0),
+    storageVer(0),
+    dryWet(1.0f),
+    storage(NULL),
+    storageLen(0) {}
+};
+
 struct DivSong {
-  // version number used for saving the song.
-  // Furnace will save using the latest possible version,
-  // known version numbers:
-  // - 26: v1.1.3
-  //   - changes height of FDS wave to 6-bit (it was 4-bit before)
-  // - 25: v1.1
-  //   - adds pattern names (in a rather odd way)
-  //   - introduces SMS+OPLL system
-  // - 24: v0.12/0.13/1.0
-  //   - current format version
-  //   - changes pattern length from char to int, probably to allow for size 256
-  // - 23: ???
-  //   - what happened here?
-  // - 20: v11.1 (?)
-  //   - E5xx effect range is now ±1 semitone
-  // - 19: v11
-  //   - introduces Arcade system
-  //   - changes to the FM instrument format due to YMU759 being dropped
-  // - 18: v10
-  //   - radically changes STD instrument for Game Boy
-  // - 17: v9
-  //   - changes C64 volIsCutoff flag from int to char for unknown reasons
-  // - 16: v8 (?)
-  //   - introduces C64 system
-  // - 15: v7 (?)
-  // - 14: v6 (?)
-  //   - introduces NES system
-  //   - changes macro and wave values from char to int
-  // - 13: v5.1
-  //   - introduces PC Engine system in later version (how?)
-  //   - stores highlight in file
-  // - 12: v5 (?)
-  //   - introduces Game Boy system
-  //   - introduces wavetables
-  // - 11: ???
-  //   - introduces Sega Master System
-  //   - custom Hz support
-  //   - instrument type (FM/STD) present
-  //   - prior to this version the instrument type depended on the system
-  // - 10: ???
-  //   - introduces multiple effect columns
-  // - 9: v3.9
-  //   - introduces Genesis system
-  //   - introduces system number
-  //   - patterns now stored in current known format
-  // - 8: ???
-  //   - only used in the Medivo YMU cover
-  // - 7: ???
-  //   - only present in a later version of First.dmf
-  //   - pattern format changes: empty field is 0xFF instead of 0x80
-  //   - instrument now stored in pattern
-  // - 5: BETA 3
-  //   - adds arpeggio tick
-  // - 4: BETA 2
-  //   - possibly adds instrument number (stored in channel)?
-  //   - cannot confirm as I don't have any version 4 modules
-  // - 3: BETA 1
-  //   - possibly the first version that could save
-  //   - basic format, no system number, 16 instruments, one speed, YMU759-only
-  //   - patterns were stored in a different format (chars instead of shorts) and no instrument
-  //   - if somebody manages to find a version 2 or even 1 module, please tell me as it will be worth more than a luxury vehicle
   unsigned short version;
   bool isDMF;
 
   // system
-  DivSystem system[32];
+  DivSystem system[DIV_MAX_CHIPS];
   unsigned char systemLen;
-  signed char systemVol[32];
-  signed char systemPan[32];
-  // interpretation of these flags varies depending on system.
-  // - most systems:
-  //   - bit 0: PAL
-  // - NES:
-  //   - bit 0-1: system type
-  //     - 0: NTSC
-  //     - 1: PAL
-  //     - 2: Dendy
-  // - SMS/SN76489:
-  //   - bit 0-1, 8-15: clock rate
-  //     - 0000: 3.58MHz (NTSC)
-  //     - 0001: 3.55MHz (PAL)
-  //     - 0002: 4MHz (Other)
-  //     - 0003: 1.79MHz (half NTSC)
-  //     - 0100: 3MHz
-  //     - 0101: 2MHz
-  //     - 0102: 447KHz (NTSC / 8)
-  //   - bit 2-3, 6-7: chip type
-  //     - 00: Sega VDP (16-bit noise)
-  //     - 04: real SN76489 (15-bit noise)
-  //     - 08: real SN76489 with Atari-like short noise buzz (15-bit noise)
-  //     - 0c: Game Gear (16-bit noise, stereo)
-  //     - 40: real SN76489A (17-bit noise)
-  //     - 44: real SN76496 (17-bit noise)
-  //     - 48: NCR 8496 (16-bit noise)
-  //     - 4c: Tandy PSSJ-3 (16-bit noise)
-  //     - 80: real SN94624 (15-bit noise)
-  //     - 84: real SN76494 (17-bit noise)
-  //   - bit 4: disable noise phase reset
-  // - YM2612/YM3438:
-  //   - bit 0-30: clock rate
-  //     - 0: Genesis NTSC (7.67MHz)
-  //     - 1: Genesis PAL (7.61MHz)
-  //     - 2: FM Towns (8MHz)
-  //     - 3: AtGames Genesis (6.13MHz)
-  //     - 4: Sega System 32 (8.06MHz)
-  //   - bit 31: DAC distortion
-  //     - 0: disable
-  //     - 1: enable
-  // - YM2151:
-  //   - bit 0-7: clock rate
-  //     - 0: 3.58MHz (NTSC)
-  //     - 1: 3.55MHz (PAL)
-  //     - 2: 4MHz
-  // - YM2610(B):
-  //   - bit 0-7: clock rate
-  //     - 0: 8MHz (Neo Geo MVS)
-  //     - 1: 8.06MHz (Neo Geo AES)
-  // - AY-3-8910/AY8930:
-  //   - bit 0-3: clock rate
-  //     - 0: 1.79MHz (MSX NTSC)
-  //     - 1: 1.77MHz (ZX Spectrum, MSX PAL, etc.)
-  //     - 2: 1.75MHz (ZX Spectrum)
-  //     - 3: 2MHz (Atari ST)
-  //     - 4: 1.5MHz (Vectrex)
-  //     - 5: 1MHz (Amstrad CPC)
-  //     - 6: 0.89MHz (Sunsoft 5B)
-  //     - 7: 1.67MHz
-  //     - 8: 0.83MHz (Sunsoft 5B on PAL)
-  //     - 9: 1.10MHz (Gamate/VIC-20 PAL)
-  //     - 10: 2.097152MHz (Game Boy)
-  //     - 11: 3.58MHz (Darky)
-  //     - 12: 3.6MHz (Darky)
-  //     - 13: 1.25MHz
-  //     - 14: 1.536MHz
-  //   - bit 4-5: chip type (ignored on AY8930)
-  //     - 0: AY-3-8910 or similar
-  //     - 1: YM2149
-  //     - 2: Sunsoft 5B
-  //     - 3: AY-3-8914
-  //   - bit 6: stereo (ignored on Sunsoft 5B)
-  //     - 0: mono
-  //     - 1: stereo ABC
-  //   - bit 7: clock divider pin (YM2149, AY8930)
-  //     - 0: high (disable divider)
-  //     - 1: low (internally divided to half)
-  // - SAA1099:
-  //   - bit 0-1: clock rate
-  //     - 0: 8MHz (SAM Coupé)
-  //     - 1: 7.15MHz (Game Blaster, NTSC)
-  //     - 2: 7.09MHz (PAL)
-  // - Amiga:
-  //   - bit 0: clock rate
-  //     - 0: 7.15MHz (NTSC)
-  //     - 1: 7.09MHz (PAL)
-  //   - bit 1: model
-  //     - 0: Amiga 500
-  //     - 1: Amiga 1200
-  //   - bit 8-14: stereo separation
-  //     - 0 is 0% while 127 is 100%
-  // - PC Speaker:
-  //   - bit 0-1: speaker type
-  //     - 0: unfiltered
-  //     - 1: cone
-  //     - 2: piezo
-  //     - 3: real (TODO)
-  // - QSound:
-  //   - bit 12-20: echo feedback
-  //     - Valid values are 0-255
-  //   - bit 0-11: echo delay length
-  //     - Valid values are 0-2725
-  //     - 0 is max length, 2725 is min length
-  // - OPLL:
-  //   - bit 0-3: clock rate
-  //     - 0: NTSC (3.58MHz)
-  //     - 1: PAL (3.55MHz)
-  //     - 2: Other (4MHz)
-  //     - 3: half NTSC (1.79MHz)
-  //   - bit 4-7: patch set
-  //     - 0: YM2413
-  //     - 1: YMF281
-  //     - 2: YM2423
-  //     - 3: VRC7
-  //     - 4: custom (TODO)
-  // - X1-010:
-  //   - bit 0-3: clock rate
-  //     - 0: 16MHz (Seta 1)
-  //     - 1: 16.67MHz (Seta 2)
-  //   - bit 4: stereo
-  //     - 0: mono
-  //     - 1: stereo
-  // - YM2203:
-  //   - bit 0-4: clock rate
-  //     - 0: 3.58MHz (NTSC)
-  //     - 1: 3.55MHz (PAL)
-  //     - 2: 4MHz
-  //     - 3: 3MHz
-  //     - 4: 3.9936MHz (PC-88, PC-98)
-  //     - 5: 1.5MHz
-  //   - bit 5-6: output rate
-  //     - 0: FM: clock / 72, SSG: clock / 16
-  //     - 1: FM: clock / 36, SSG: clock / 8
-  //     - 2: FM: clock / 24, SSG: clock / 4
-  // - YM2608:
-  //   - bit 0-4: clock rate
-  //     - 0: 8MHz
-  //     - 1: 7.987MHz (PC-88, PC-98)
-  //   - bit 5-6: output rate
-  //     - 0: FM: clock / 144, SSG: clock / 32
-  //     - 1: FM: clock / 72, SSG: clock / 16
-  //     - 2: FM: clock / 48, SSG: clock / 8
-  // - YM3526, YM3812, Y8950:
-  //   - bit 0-7: clock rate
-  //     - 0: 3.58MHz (NTSC)
-  //     - 1: 3.55MHz (PAL)
-  //     - 2: 4MHz
-  //     - 3: 3MHz
-  //     - 4: 3.9936MHz (PC-88, PC-98)
-  //     - 5: 3.5MHz
-  // - YMF262:
-  //   - bit 0-7: clock rate
-  //     - 0: 14.32MHz (NTSC)
-  //     - 1: 14.19MHz (PAL)
-  //     - 2: 14MHz
-  //     - 3: 16MHz
-  //     - 4: 15MHz
-  // - YMF289B: (TODO)
-  //   - bit 0-7: clock rate
-  //     - 0: 33.8688MHz
-  //     - 1: 28.64MHz (NTSC)
-  //     - 2: 28.38MHz (PAL)
-  // - MSM6295:
-  //   - bit 0-6: clock rate
-  //     - 0: 1MHz
-  //     - 1: 1.056MHz
-  //     - 2: 4MHz
-  //     - 3: 4.224MHz
-  //     - 4: 3.58MHz (NTSC)
-  //     - 5: 1.79MHz (Half NTSC)
-  //     - 6: 1.023MHz
-  //     - 7: 0.895MHz (Quarter NTSC)
-  //     - 8: 2MHz
-  //     - 9: 2.112MHz
-  //     - 10: 0.875MHz
-  //     - 11: 0.9375MHz
-  //     - 12: 1.5MHz
-  //     - 13: 3MHz
-  //     - 14: 1.193MHz
-  //   - bit 7: Output rate
-  //     - 0: clock / 132
-  //     - 1: clock / 165
-  // - SCC/+:
-  //   - bit 0-6: clock rate
-  //     - 0: 1.79MHz (MSX NTSC)
-  //     - 1: 1.77MHz (PAL)
-  //     - 2: 1.5MHz
-  //     - 3: 2MHz
-  // - YMZ280B:
-  //   - bit 0-7: clock rate
-  //     - 0: 16.9344MHz
-  //     - 1: 14.32MHz (NTSC)
-  //     - 2: 14.19MHz (PAL)
-  //     - 3: 16MHz
-  //     - 4: 16.67MHz
-  //     - 5: 14MHz
-  unsigned int systemFlags[32];
+  float systemVol[DIV_MAX_CHIPS];
+  float systemPan[DIV_MAX_CHIPS];
+  float systemPanFR[DIV_MAX_CHIPS];
+  DivConfig systemFlags[DIV_MAX_CHIPS];
 
   // song information
   String name, author, systemName;
@@ -508,19 +323,45 @@ struct DivSong {
   bool newVolumeScaling;
   bool volMacroLinger;
   bool brokenOutVol;
+  bool brokenOutVol2;
   bool e1e2StopOnSameNote;
   bool brokenPortaArp;
   bool snNoLowPeriods;
+  bool disableSampleMacro;
+  bool autoSystem;
+  bool oldArpStrategy;
+  bool patchbayAuto;
+  bool brokenPortaLegato;
+  bool brokenFMOff;
+  bool preNoteNoEffect;
+  bool oldDPCM;
+  bool resetArpPhaseOnNewNote;
+  bool ceilVolumeScaling;
+  bool oldAlwaysSetVolume;
+  bool oldSampleOffset;
 
   std::vector<DivInstrument*> ins;
   std::vector<DivWavetable*> wave;
   std::vector<DivSample*> sample;
 
   std::vector<DivSubSong*> subsong;
+  std::vector<unsigned int> patchbay;
+  std::vector<DivGroovePattern> grooves;
 
-  DivInstrument nullIns, nullInsOPLL, nullInsOPL, nullInsOPLDrums, nullInsQSound;
+  std::vector<DivAssetDir> insDir;
+  std::vector<DivAssetDir> waveDir;
+  std::vector<DivAssetDir> sampleDir;
+
+  std::vector<DivEffectStorage> effects;
+
+  DivInstrument nullIns, nullInsOPLL, nullInsOPL, nullInsOPLDrums, nullInsQSound, nullInsESFM;
   DivWavetable nullWave;
   DivSample nullSample;
+
+  /**
+   * find data past 0Bxx effects and place that into new sub-songs.
+   */
+  void findSubSongs(int chans);
 
   /**
    * clear orders and patterns.
@@ -612,14 +453,27 @@ struct DivSong {
     newVolumeScaling(true),
     volMacroLinger(true),
     brokenOutVol(false),
+    brokenOutVol2(false),
     e1e2StopOnSameNote(false),
     brokenPortaArp(false),
-    snNoLowPeriods(false) {
-    for (int i=0; i<32; i++) {
+    snNoLowPeriods(false),
+    disableSampleMacro(false),
+    autoSystem(true),
+    oldArpStrategy(false),
+    patchbayAuto(true),
+    brokenPortaLegato(false),
+    brokenFMOff(false),
+    preNoteNoEffect(false),
+    oldDPCM(false),
+    resetArpPhaseOnNewNote(false),
+    ceilVolumeScaling(false),
+    oldAlwaysSetVolume(false),
+    oldSampleOffset(false) {
+    for (int i=0; i<DIV_MAX_CHIPS; i++) {
       system[i]=DIV_SYSTEM_NULL;
-      systemVol[i]=64;
-      systemPan[i]=0;
-      systemFlags[i]=0;
+      systemVol[i]=1.0;
+      systemPan[i]=0.0;
+      systemPanFR[i]=0.0;
     }
     subsong.push_back(new DivSubSong);
     system[0]=DIV_SYSTEM_YM2612;
@@ -717,6 +571,49 @@ struct DivSong {
     nullInsOPLDrums.fm.op[3].mult=2;
 
     nullInsQSound.std.panLMacro.mode=true;
+
+    // ESFM default instrument - port of OPN default instrument
+    nullInsESFM.esfm.noise=0;
+    nullInsESFM.esfm.op[0].outLvl=0;
+    nullInsESFM.esfm.op[0].modIn=4;
+    nullInsESFM.esfm.op[0].dt=2;
+    nullInsESFM.fm.op[0].tl=42;
+    nullInsESFM.fm.op[0].ar=15;
+    nullInsESFM.fm.op[0].dr=3;
+    nullInsESFM.fm.op[0].sl=15;
+    nullInsESFM.fm.op[0].rr=3;
+    nullInsESFM.fm.op[0].mult=5;
+
+    nullInsESFM.esfm.op[1].outLvl=0;
+    nullInsESFM.esfm.op[1].modIn=7;
+    nullInsESFM.esfm.op[1].dt=-3;
+    nullInsESFM.fm.op[1].tl=18;
+    nullInsESFM.fm.op[1].ar=15;
+    nullInsESFM.fm.op[1].dr=3;
+    nullInsESFM.fm.op[1].sl=15;
+    nullInsESFM.fm.op[1].rr=4;
+    nullInsESFM.fm.op[1].mult=1;
+
+    nullInsESFM.esfm.op[2].outLvl=0;
+    nullInsESFM.esfm.op[2].modIn=7;
+    nullInsESFM.esfm.op[2].dt=2;
+    nullInsESFM.fm.op[2].tl=48;
+    nullInsESFM.fm.op[2].ar=15;
+    nullInsESFM.fm.op[2].dr=2;
+    nullInsESFM.fm.op[2].sl=11;
+    nullInsESFM.fm.op[2].rr=1;
+    nullInsESFM.fm.op[2].mult=1;
+    nullInsESFM.fm.op[2].sus=1;
+
+    nullInsESFM.esfm.op[3].outLvl=7;
+    nullInsESFM.esfm.op[3].modIn=7;
+    nullInsESFM.esfm.op[3].dt=-3;
+    nullInsESFM.fm.op[3].tl=0;
+    nullInsESFM.fm.op[3].ar=15;
+    nullInsESFM.fm.op[3].dr=3;
+    nullInsESFM.fm.op[3].sl=15;
+    nullInsESFM.fm.op[3].rr=9;
+    nullInsESFM.fm.op[3].mult=1;
   }
 };
 

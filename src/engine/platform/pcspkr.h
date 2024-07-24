@@ -1,6 +1,6 @@
 /**
  * Furnace Tracker - multi-system chiptune tracker
- * Copyright (C) 2021-2022 tildearrow and contributors
+ * Copyright (C) 2021-2024 tildearrow and contributors
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -21,43 +21,14 @@
 #define _PCSPKR_H
 
 #include "../dispatch.h"
-#include "../macroInt.h"
-#include <queue>
+#include "../../fixedQueue.h"
 #include <thread>
-#include <mutex>
 #include <condition_variable>
 
 class DivPlatformPCSpeaker: public DivDispatch {
-  struct Channel {
-    int freq, baseFreq, pitch, pitch2, note, ins;
-    unsigned char duty, sweep;
-    bool active, insChanged, freqChanged, sweepChanged, keyOn, keyOff, inPorta, furnaceDac;
-    signed char vol, outVol, wave;
-    DivMacroInt std;
-    void macroInit(DivInstrument* which) {
-      std.init(which);
-      pitch2=0;
-    }
+  struct Channel: public SharedChannel<signed char> {
     Channel():
-      freq(0),
-      baseFreq(0),
-      pitch(0),
-      pitch2(0),
-      note(0),
-      ins(-1),
-      duty(0),
-      sweep(8),
-      active(false),
-      insChanged(true),
-      freqChanged(false),
-      sweepChanged(false),
-      keyOn(false),
-      keyOff(false),
-      inPorta(false),
-      furnaceDac(false),
-      vol(15),
-      outVol(15),
-      wave(-1) {}
+      SharedChannel<signed char>(15) {}
   };
   Channel chan[1];
   DivDispatchOscBuffer* oscBuf;
@@ -68,34 +39,42 @@ class DivPlatformPCSpeaker: public DivDispatch {
   struct RealQueueVal {
     int tv_sec, tv_nsec;
     unsigned short val;
+    RealQueueVal():
+      tv_sec(0),
+      tv_nsec(0),
+      val(0) {}
     RealQueueVal(int sec, int nsec, unsigned short v):
       tv_sec(sec),
       tv_nsec(nsec),
       val(v) {}
   };
-  std::queue<RealQueueVal> realQueue;
+  FixedQueue<RealQueueVal,2048> realQueue;
   std::mutex realQueueLock;
   bool isMuted[1];
-  bool on, flip, lastOn, realOutEnabled;
+  bool on, flip, lastOn, realOutEnabled, resetPhase;
   int pos, speakerType, beepFD, realOutMethod;
   float low, band;
   float low2, high2, band2;
   float low3, band3;
+  float cut;
+  float reso;
+
   unsigned short freq, lastFreq;
   unsigned char regPool[2];
 
+  friend void putDispatchChip(void*,int);
   friend void putDispatchChan(void*,int,int);
 
   void beepFreq(int freq, int delay=0);
 
-  void acquire_unfilt(short* bufL, short* bufR, size_t start, size_t len);
-  void acquire_cone(short* bufL, short* bufR, size_t start, size_t len);
-  void acquire_piezo(short* bufL, short* bufR, size_t start, size_t len);
-  void acquire_real(short* bufL, short* bufR, size_t start, size_t len);
+  void acquire_unfilt(short** buf, size_t len);
+  void acquire_cone(short** buf, size_t len);
+  void acquire_piezo(short** buf, size_t len);
+  void acquire_real(short** buf, size_t len);
 
   public:
     void pcSpeakerThread();
-    void acquire(short* bufL, short* bufR, size_t start, size_t len);
+    void acquire(short** buf, size_t len);
     int dispatch(DivCommand c);
     void* getChanState(int chan);
     DivMacroInt* getChanMacroInt(int ch);
@@ -107,13 +86,13 @@ class DivPlatformPCSpeaker: public DivDispatch {
     void tick(bool sysTick=true);
     void muteChannel(int ch, bool mute);
     bool keyOffAffectsArp(int ch);
-    void setFlags(unsigned int flags);
+    void setFlags(const DivConfig& flags);
     void notifyInsDeletion(void* ins);
     void notifyPlaybackStop();
     void poke(unsigned int addr, unsigned short val);
     void poke(std::vector<DivRegWrite>& wlist);
     const char** getRegisterSheet();
-    int init(DivEngine* parent, int channels, int sugRate, unsigned int flags);
+    int init(DivEngine* parent, int channels, int sugRate, const DivConfig& flags);
     void quit();
     ~DivPlatformPCSpeaker();
 };

@@ -1,6 +1,6 @@
 /**
  * Furnace Tracker - multi-system chiptune tracker
- * Copyright (C) 2021-2022 tildearrow and contributors
+ * Copyright (C) 2021-2024 tildearrow and contributors
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -21,7 +21,7 @@
 #define _TA_UTILS_H
 #include <stdio.h>
 #include <string.h>
-#include <string>
+#include "pch.h"
 
 #ifdef _MSC_VER
 #include <BaseTsd.h>
@@ -41,6 +41,21 @@ typedef std::string String;
 #define MIN(a,b) (((a)<(b))?(a):(b))
 #define MAX(a,b) (((a)>(b))?(a):(b))
 #define CLAMP(x,xMin,xMax) (MIN(MAX((x),(xMin)),(xMax)))
+
+#ifdef HAVE_LOCALE
+#ifdef HAVE_MOMO
+#include <momo.h>
+#define _(_str) momo_gettext(_str)
+#else
+#include <libintl.h>
+#define _(_str) gettext(_str)
+#endif
+#else
+#define _(_str) _str
+#endif
+
+#define _GN(_strS,_strP,_cond) (((_cond)==1)?(_strS):(_strP))
+#define _N(_str) _str
 
 typedef std::wstring WString;
 
@@ -65,5 +80,7 @@ struct TAParam {
     value(v),
     func(f) {}
 };
+
+void reportError(String what);
 
 #endif

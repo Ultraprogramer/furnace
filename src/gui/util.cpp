@@ -1,6 +1,6 @@
 /**
  * Furnace Tracker - multi-system chiptune tracker
- * Copyright (C) 2021-2022 tildearrow and contributors
+ * Copyright (C) 2021-2024 tildearrow and contributors
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -32,6 +32,15 @@
 #endif
 
 String getHomeDir() {
+#ifdef IS_MOBILE
+
+#ifdef ANDROID
+  return "/storage/emulated/0/";
+#else
+  return "/";
+#endif
+
+#else
   String ret;
   char tempDir[4096];
 
@@ -73,6 +82,7 @@ String getHomeDir() {
   }
 
   return ret;
+#endif
 }
 
 String getKeyName(int key, bool emptyNone) {
@@ -80,23 +90,23 @@ String getKeyName(int key, bool emptyNone) {
     if (emptyNone) {
       return "";
     } else {
-      return "<nothing>";
+      return _("<nothing>");
     }
   }
   String ret;
-  if (key&FURKMOD_CTRL) ret+="Ctrl-";
+  if (key&FURKMOD_CTRL) ret+=_("Ctrl-");
   if (key&FURKMOD_META) ret+=META_MODIFIER_NAME;
-  if (key&FURKMOD_ALT) ret+="Alt-";
-  if (key&FURKMOD_SHIFT) ret+="Shift-";
+  if (key&FURKMOD_ALT) ret+=_("Alt-");
+  if (key&FURKMOD_SHIFT) ret+=_("Shift-");
   if ((key&FURK_MASK)==0xffffff) {
     ret+="...";
     return ret;
   }
   const char* name=SDL_GetKeyName(key&FURK_MASK);
   if (name==NULL) {
-    ret+="Unknown";
+    ret+=_("Unknown");
   } else if (name[0]==0) {
-    ret+="Unknown";
+    ret+=_("Unknown");
   } else {
     ret+=name;
   }

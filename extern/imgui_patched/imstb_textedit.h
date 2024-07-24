@@ -2,6 +2,7 @@
 // This is a slightly modified version of stb_textedit.h 1.14.
 // Those changes would need to be pushed into nothings/stb:
 // - Fix in stb_textedit_discard_redo (see https://github.com/nothings/stb/issues/321)
+// - Fix in stb_textedit_find_charpos to handle last line (see https://github.com/ocornut/imgui/issues/6000)
 // Grep for [DEAR IMGUI] to find the changes.
 
 // stb_textedit.h - v1.14  - public domain - Sean Barrett
@@ -524,29 +525,14 @@ static void stb_textedit_find_charpos(StbFindState *find, STB_TEXTEDIT_STRING *s
    int z = STB_TEXTEDIT_STRINGLEN(str);
    int i=0, first;
 
-   if (n == z) {
-      // if it's at the end, then find the last line -- simpler than trying to
-      // explicitly handle this case in the regular code
-      if (single_line) {
-         STB_TEXTEDIT_LAYOUTROW(&r, str, 0);
-         find->y = 0;
-         find->first_char = 0;
-         find->length = z;
-         find->height = r.ymax - r.ymin;
-         find->x = r.x1;
-      } else {
-         find->y = 0;
-         find->x = 0;
-         find->height = 1;
-         while (i < z) {
-            STB_TEXTEDIT_LAYOUTROW(&r, str, i);
-            prev_start = i;
-            i += r.num_chars;
-         }
-         find->first_char = i;
-         find->length = 0;
-         find->prev_first = prev_start;
-      }
+   if (n == z && single_line) {
+      // special case if it's at the end (may not be needed?)
+      STB_TEXTEDIT_LAYOUTROW(&r, str, 0);
+      find->y = 0;
+      find->first_char = 0;
+      find->length = z;
+      find->height = r.ymax - r.ymin;
+      find->x = r.x1;
       return;
    }
 
@@ -557,9 +543,13 @@ static void stb_textedit_find_charpos(StbFindState *find, STB_TEXTEDIT_STRING *s
       STB_TEXTEDIT_LAYOUTROW(&r, str, i);
       if (n < i + r.num_chars)
          break;
+      if (i + r.num_chars == z && z > 0 && STB_TEXTEDIT_GETCHAR(str, z - 1) != STB_TEXTEDIT_NEWLINE)  // [DEAR IMGUI] special handling for last line
+         break;   // [DEAR IMGUI]
       prev_start = i;
       i += r.num_chars;
       find->y += r.baseline_y_delta;
+      if (i == z) // [DEAR IMGUI]
+         break;   // [DEAR IMGUI]
    }
 
    find->first_char = first = i;
@@ -717,6 +707,9 @@ static int stb_textedit_paste_internal(STB_TEXTEDIT_STRING *str, STB_TexteditSta
       state->cursor += len;
       state->has_preferred_x = 0;
       return 1;
+   } else {
+     printf("stb_textedit_paste_internal failed.\n");
+     state->cursor=0;
    }
    // note: paste failure will leave deleted selection, may be restored with an undo (see https://github.com/nothings/stb/issues/734 for details)
    return 0;
@@ -746,6 +739,9 @@ retry:
                if (STB_TEXTEDIT_INSERTCHARS(str, state->cursor, &ch, 1)) {
                   ++state->cursor;
                   state->has_preferred_x = 0;
+               } else {
+                 printf("key failed: first section.\n");
+                 state->cursor=0;
                }
             } else {
                stb_textedit_delete_selection(str,state); // implicitly clamps
@@ -753,6 +749,9 @@ retry:
                   stb_text_makeundo_insert(state, state->cursor, 1);
                   ++state->cursor;
                   state->has_preferred_x = 0;
+               } else {
+                 printf("key failed: second section.\n");
+                 state->cursor=0;
                }
             }
          }
@@ -890,7 +889,7 @@ retry:
 
             // [DEAR IMGUI]
             // going down while being on the last line shouldn't bring us to that line end
-            if (STB_TEXTEDIT_GETCHAR(str, find.first_char + find.length - 1) != STB_TEXTEDIT_NEWLINE)
+            if (!str->HasWordWrap() && STB_TEXTEDIT_GETCHAR(str, find.first_char + find.length - 1) != STB_TEXTEDIT_NEWLINE)
                break;
 
             // now find character position down a row
@@ -1275,14 +1274,22 @@ static void stb_text_undo(STB_TEXTEDIT_STRING *str, STB_TexteditState *state)
       STB_TEXTEDIT_DELETECHARS(str, u.where, u.delete_length);
    }
 
+   bool steFailed=false;
+
    // check type of recorded action:
    if (u.insert_length) {
       // easy case: was a deletion, so we need to insert n characters
-      STB_TEXTEDIT_INSERTCHARS(str, u.where, &s->undo_char[u.char_storage], u.insert_length);
+      if (!STB_TEXTEDIT_INSERTCHARS(str, u.where, &s->undo_char[u.char_storage], u.insert_length)) {
+        printf("undo u.insert_length failed\n");
+        state->cursor=0;
+        steFailed=true;
+      }
       s->undo_char_point -= u.insert_length;
    }
 
-   state->cursor = u.where + u.insert_length;
+   if (!steFailed) {
+     state->cursor = u.where + u.insert_length;
+   }
 
    s->undo_point--;
    s->redo_point--;
@@ -1327,13 +1334,21 @@ static void stb_text_redo(STB_TEXTEDIT_STRING *str, STB_TexteditState *state)
       STB_TEXTEDIT_DELETECHARS(str, r.where, r.delete_length);
    }
 
+   bool steFailed=false;
+
    if (r.insert_length) {
       // easy case: need to insert n characters
-      STB_TEXTEDIT_INSERTCHARS(str, r.where, &s->undo_char[r.char_storage], r.insert_length);
+      if (!STB_TEXTEDIT_INSERTCHARS(str, r.where, &s->undo_char[r.char_storage], r.insert_length)) {
+        printf("redo insert char failed\n");
+        state->cursor=0;
+        steFailed=true;
+      }
       s->redo_char_point += r.insert_length;
    }
 
-   state->cursor = r.where + r.insert_length;
+   if (!steFailed) {
+     state->cursor = r.where + r.insert_length;
+   }
 
    s->undo_point++;
    s->redo_point++;

@@ -1,6 +1,6 @@
 /**
  * Furnace Tracker - multi-system chiptune tracker
- * Copyright (C) 2021-2022 tildearrow and contributors
+ * Copyright (C) 2021-2024 tildearrow and contributors
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -38,16 +38,40 @@ const char** DivPlatformTIA::getRegisterSheet() {
   return regCheatSheetTIA;
 }
 
-void DivPlatformTIA::acquire(short* bufL, short* bufR, size_t start, size_t len) {
-  for (size_t h=start; h<start+len; h++) {
+void DivPlatformTIA::acquire(short** buf, size_t len) {
+  for (size_t h=0; h<len; h++) {
+    if (softwarePitch) {
+      int i=-1;
+      tuneCounter++;
+      if (tuneCounter==228) {
+        i=0;
+      }
+      if (tuneCounter>=456) {
+        i=1;
+        tuneCounter=0;
+      }
+      if (i>=0) {
+        if (chan[i].tuneCtr++>=chan[i].curFreq) {
+          int freq=chan[i].freq;
+          chan[i].tuneAcc+=chan[i].tuneFreq;
+          if (chan[i].tuneAcc>=256) {
+            freq++;
+            chan[i].tuneAcc-=256;
+          }
+          chan[i].curFreq=freq;
+          chan[i].tuneCtr=0;
+          rWrite(0x17+i,freq);
+        }
+      }
+    }
     tia.tick();
     if (mixingType==2) {
-      bufL[h]=tia.myCurrentSample[0];
-      bufR[h]=tia.myCurrentSample[1];
+      buf[0][h]=tia.myCurrentSample[0];
+      buf[1][h]=tia.myCurrentSample[1];
     } else if (mixingType==1) {
-      bufL[h]=(tia.myCurrentSample[0]+tia.myCurrentSample[1])>>1;
+      buf[0][h]=(tia.myCurrentSample[0]+tia.myCurrentSample[1])>>1;
     } else {
-      bufL[h]=tia.myCurrentSample[0];
+      buf[0][h]=tia.myCurrentSample[0];
     }
     if (++chanOscCounter>=114) {
       chanOscCounter=0;
@@ -58,36 +82,76 @@ void DivPlatformTIA::acquire(short* bufL, short* bufR, size_t start, size_t len)
 }
 
 unsigned char DivPlatformTIA::dealWithFreq(unsigned char shape, int base, int pitch) {
-  if (base&0x80000000 && ((base&0x7fffffff)<32)) {
-    return base&0x1f;
-  }
   int bp=base+pitch;
   double mult=0.25*(parent->song.tuning*0.0625)*pow(2.0,double(768+bp)/(256.0*12.0));
   if (mult<0.5) mult=0.5;
+  int ret=0;
   switch (shape) {
     case 1: // buzzy
-      return ceil(31400/(30.6*mult))-1;
+      ret=ceil(31400/(30.6*mult))-1;
       break;
     case 2: // low buzzy
-      return ceil(31400/(480*mult))-1;
+      ret=ceil(31400/(480*mult))-1;
       break;
     case 3: // flangy
-      return ceil(31400/(60*mult))-1;
+      ret=ceil(31400/(60*mult))-1;
       break;
     case 4: case 5: // square
-      return ceil(31400/(4.05*mult))-1;
+      ret=ceil(31400/(4.05*mult))-1;
       break;
     case 6: case 7: case 8: case 9: case 10: // pure buzzy/reedy/noise
-      return ceil(31400/(63*mult))-1;
+      ret=ceil(31400/(63*mult))-1;
       break;
     case 12: case 13: // low square
-      return round(31400/(4.0*3*mult))-1;
+      ret=round(31400/(4.0*3*mult))-1;
       break;
     case 14: case 15: // low pure buzzy/reedy
-      return ceil(31400/(3*63*mult))-1;
+      ret=ceil(31400/(3*63*mult))-1;
       break;
   }
-  return 0;
+
+  if (ret<0) ret=0;
+  if (ret>31) ret=31;
+
+  return ret;
+}
+
+int DivPlatformTIA::dealWithFreqNew(int shape, int bp) {
+  double mult=(parent->song.tuning*0.0625)*pow(2.0,double(768+bp)/(256.0*12.0));
+  double clock=chipClock/28.5;
+  switch (shape) {
+    case 1: // buzzy
+      mult*=30;
+      break;
+    case 2: // low buzzy
+      mult*=465;
+      break;
+    case 3: // flangy
+      mult*=58.125;
+      break;
+    case 4: case 5: // square
+      mult*=4;
+      break;
+    case 6: case 7: case 9: case 10: // pure buzzy/reedy
+      mult*=62;
+      break;
+    case 8: // noise
+      mult*=63.875;
+      break;
+    case 12: case 13: // low square
+      mult*=12;
+      break;
+    case 14: case 15: // low pure buzzy/reedy
+      mult*=186;
+      break;
+  }
+  if (mult<1) mult=1;
+  if (clock<mult) {
+    return 0;
+  }
+  double ret=floor(clock/mult);
+  int fract=((clock/mult)-ret)*256;
+  return ret*256+fract-256;
 }
 
 void DivPlatformTIA::tick(bool sysTick) {
@@ -102,19 +166,7 @@ void DivPlatformTIA::tick(bool sysTick) {
         rWrite(0x19+i,chan[i].outVol&15);
       }
     }
-    // TODO: the way arps work on TIA is really weird
-    if (chan[i].std.arp.had) {
-      if (!chan[i].inPorta) {
-        if (chan[i].std.arp.val<0 && (!(chan[i].std.arp.val&0x40000000))) {
-          chan[i].baseFreq=0x80000000|(chan[i].std.arp.val|0x40000000);
-        } else if (chan[i].std.arp.val>=0 && chan[i].std.arp.val&0x40000000) {
-          chan[i].baseFreq=0x80000000|(chan[i].std.arp.val&(~0x40000000));
-        } else {
-          chan[i].baseFreq=(chan[i].note+chan[i].std.arp.val)<<8;
-        }
-      }
-      chan[i].freqChanged=true;
-    }
+    chan[i].handleArp();
     if (chan[i].std.wave.had) {
       chan[i].shape=chan[i].std.wave.val&15;
       rWrite(0x15+i,chan[i].shape);
@@ -130,23 +182,65 @@ void DivPlatformTIA::tick(bool sysTick) {
       chan[i].freqChanged=true;
     }
     if (chan[i].freqChanged || chan[i].keyOn || chan[i].keyOff) {
-      chan[i].freq=dealWithFreq(chan[i].shape,chan[i].baseFreq,chan[i].pitch)+chan[i].pitch2;
-      if ((chan[i].shape==4 || chan[i].shape==5) && !(chan[i].baseFreq&0x80000000 && ((chan[i].baseFreq&0x7fffffff)<32))) {
-        if (chan[i].baseFreq<39*256) {
-          rWrite(0x15+i,6);
-          chan[i].freq=dealWithFreq(6,chan[i].baseFreq,chan[i].pitch)+chan[i].pitch2;
-        } else if (chan[i].baseFreq<59*256) {
-          rWrite(0x15+i,12);
-          chan[i].freq=dealWithFreq(12,chan[i].baseFreq,chan[i].pitch)+chan[i].pitch2;
-        } else {
-          rWrite(0x15+i,chan[i].shape);
+      if (chan[i].fixedArp) {
+        chan[i].freq=chan[i].baseNoteOverride&31;
+        chan[i].tuneFreq=0;
+        if (!skipRegisterWrites && dumpWrites) {
+          addWrite(0xfffe0000+i,chan[i].freq*256);
         }
+      } else if (oldPitch) {
+        int bf=chan[i].baseFreq;
+        if (!chan[i].fixedArp) {
+          bf+=chan[i].arpOff<<8;
+        }
+        chan[i].freq=dealWithFreq(chan[i].shape,bf,chan[i].pitch+chan[i].pitch2);
+        if (chan[i].shape==4 || chan[i].shape==5) {
+          if (bf<39*256) {
+            rWrite(0x15+i,6);
+            chan[i].freq=dealWithFreq(6,bf,chan[i].pitch+chan[i].pitch2);
+          } else if (bf<59*256) {
+            rWrite(0x15+i,12);
+            chan[i].freq=dealWithFreq(12,bf,chan[i].pitch+chan[i].pitch2);
+          } else {
+            rWrite(0x15+i,chan[i].shape);
+          }
+        }
+        if (chan[i].freq>31) chan[i].freq=31;
+        chan[i].tuneFreq=0;
+      } else {
+        int bf=chan[i].baseFreq+(chan[i].arpOff<<8);
+        int shape=chan[i].shape;
+        if (shape==4 || shape==5) {
+          if (bf<40*256) {
+            shape=6;
+            rWrite(0x15+i,6);
+          } else if (bf<59*256) {
+            shape=12;
+            rWrite(0x15+i,12);
+          } else {
+            rWrite(0x15+i,4);
+          }
+        }
+        bf+=chan[i].pitch+chan[i].pitch2;
+        int freq=dealWithFreqNew(shape,bf);
+        if (freq>=31*256) freq=31*256;
+        if (softwarePitch && !skipRegisterWrites && dumpWrites) {
+          addWrite(0xfffe0000+i,freq);
+        }
+        chan[i].freq=freq>>8;
+        chan[i].tuneFreq=freq&255;
       }
-      if (chan[i].freq>31) chan[i].freq=31;
+
       if (chan[i].keyOff) {
         rWrite(0x19+i,0);
       }
-      rWrite(0x17+i,chan[i].freq);
+      if (!softwarePitch) {
+        if (chan[i].tuneFreq>=128) chan[i].freq++;
+        rWrite(0x17+i,chan[i].freq);
+        if (!skipRegisterWrites && dumpWrites) {
+          addWrite(0xfffe0000+i,chan[i].freq<<8);
+        }
+      }
       if (chan[i].keyOn) chan[i].keyOn=false;
       if (chan[i].keyOff) chan[i].keyOff=false;
       chan[i].freqChanged=false;
@@ -198,10 +292,10 @@ int DivPlatformTIA::dispatch(DivCommand c) {
       if (!chan[c.chan].std.vol.has) {
         chan[c.chan].outVol=c.value;
       }
-      if (isMuted[c.chan]) {
+      if (isMuted[c.chan] || !chan[c.chan].active) {
         rWrite(0x19+c.chan,0);
       } else {
-        rWrite(0x19+c.chan,chan[c.chan].vol&15);
+        rWrite(0x19+c.chan,chan[c.chan].outVol&15);
       }
       break;
     }
@@ -253,8 +347,14 @@ int DivPlatformTIA::dispatch(DivCommand c) {
       rWrite(0x15+c.chan,chan[c.chan].shape);
       chan[c.chan].freqChanged=true;
       break;
-    case DIV_ALWAYS_SET_VOLUME:
-      return 0;
+    case DIV_CMD_MACRO_OFF:
+      chan[c.chan].std.mask(c.value,true);
+      break;
+    case DIV_CMD_MACRO_ON:
+      chan[c.chan].std.mask(c.value,false);
+      break;
+    case DIV_CMD_MACRO_RESTART:
+      chan[c.chan].std.restart(c.value);
       break;
     case DIV_CMD_GET_VOLMAX:
       return 15;
@@ -263,10 +363,14 @@ int DivPlatformTIA::dispatch(DivCommand c) {
       if (chan[c.chan].active && c.value2) {
         if (parent->song.resetMacroOnPorta) chan[c.chan].macroInit(parent->getIns(chan[c.chan].ins,DIV_INS_TIA));
       }
-      if (!chan[c.chan].inPorta && c.value && !parent->song.brokenPortaArp && chan[c.chan].std.arp.will) chan[c.chan].baseFreq=(chan[c.chan].note<<8);
       chan[c.chan].inPorta=c.value;
       break;
     case DIV_CMD_PRE_NOTE:
+      break;
+    case DIV_CMD_EXTERNAL:
+      if (!skipRegisterWrites && dumpWrites) {
+        addWrite(0xfffe0002,c.value);
+      }
       break;
     default:
       //printf("WARNING: unimplemented command %d\n",c.cmd);
@@ -315,6 +419,7 @@ int DivPlatformTIA::getRegisterPoolSize() {
 }
 
 void DivPlatformTIA::reset() {
+  tuneCounter=0;
   tia.reset(mixingType);
   memset(regPool,0,16);
   for (int i=0; i<2; i++) {
@@ -328,12 +433,16 @@ float DivPlatformTIA::getPostAmp() {
   return 0.5f;
 }
 
-bool DivPlatformTIA::isStereo() {
-  return (mixingType==2);
+int DivPlatformTIA::getOutputCount() {
+  return (mixingType==2)?2:1;
 }
 
 bool DivPlatformTIA::keyOffAffectsArp(int ch) {
   return true;
+}
+
+bool DivPlatformTIA::getLegacyAlwaysSetVolume() {
+  return false;
 }
 
 void DivPlatformTIA::notifyInsDeletion(void* ins) {
@@ -350,21 +459,24 @@ void DivPlatformTIA::poke(std::vector<DivRegWrite>& wlist) {
   for (DivRegWrite& i: wlist) rWrite(i.addr,i.val);
 }
 
-void DivPlatformTIA::setFlags(unsigned int flags) {
-  if (flags&1) {
-    rate=COLOR_PAL*4.0/5.0;
+void DivPlatformTIA::setFlags(const DivConfig& flags) {
+  if (flags.getInt("clockSel",0)) {
+    chipClock=COLOR_PAL*4.0/5.0;
   } else {
-    rate=COLOR_NTSC;
+    chipClock=COLOR_NTSC;
   }
-  chipClock=rate;
-  mixingType=(flags>>1)&3;
+  CHECK_CUSTOM_CLOCK;
+  rate=chipClock;
+  mixingType=flags.getInt("mixingType",0)&3;
+  softwarePitch=flags.getBool("softwarePitch",false);
+  oldPitch=flags.getBool("oldPitch",false);
   for (int i=0; i<2; i++) {
     oscBuf[i]->rate=rate/114;
   }
   tia.reset(mixingType);
 }
 
-int DivPlatformTIA::init(DivEngine* p, int channels, int sugRate, unsigned int flags) {
+int DivPlatformTIA::init(DivEngine* p, int channels, int sugRate, const DivConfig& flags) {
   parent=p;
   dumpWrites=false;
   skipRegisterWrites=false;

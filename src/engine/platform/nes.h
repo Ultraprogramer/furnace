@@ -1,6 +1,6 @@
 /**
  * Furnace Tracker - multi-system chiptune tracker
- * Copyright (C) 2021-2022 tildearrow and contributors
+ * Copyright (C) 2021-2024 tildearrow and contributors
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -21,72 +21,70 @@
 #define _NES_H
 
 #include "../dispatch.h"
-#include "../macroInt.h"
 
 #include "sound/nes_nsfplay/nes_apu.h"
+#include "sound/nes_nsfplay/5e01_apu.h"
 
 class DivPlatformNES: public DivDispatch {
-  struct Channel {
-    int freq, baseFreq, pitch, pitch2, prevFreq, note, ins;
-    unsigned char duty, sweep;
-    bool active, insChanged, freqChanged, sweepChanged, keyOn, keyOff, inPorta, furnaceDac;
-    signed char vol, outVol, wave;
-    DivMacroInt std;
-    void macroInit(DivInstrument* which) {
-      std.init(which);
-      pitch2=0;
-    }
+  struct Channel: public SharedChannel<signed char> {
+    int prevFreq;
+    unsigned char duty, sweep, envMode, len;
+    bool sweepChanged, furnaceDac, setPos;
     Channel():
-      freq(0),
-      baseFreq(0),
-      pitch(0),
-      pitch2(0),
+      SharedChannel<signed char>(15),
       prevFreq(65535),
-      note(0),
-      ins(-1),
       duty(0),
       sweep(8),
-      active(false),
-      insChanged(true),
-      freqChanged(false),
+      envMode(3),
+      len(0x1f),
       sweepChanged(false),
-      keyOn(false),
-      keyOff(false),
-      inPorta(false),
       furnaceDac(false),
-      vol(15),
-      outVol(15),
-      wave(-1) {}
+      setPos(false) {}
   };
   Channel chan[5];
   DivDispatchOscBuffer* oscBuf[5];
   bool isMuted[5];
-  int dacPeriod, dacRate;
+  int dacPeriod, dacRate, dpcmPos;
   unsigned int dacPos, dacAntiClick;
   int dacSample;
   unsigned char* dpcmMem;
   size_t dpcmMemLen;
+  bool sampleLoaded[256];
   unsigned char dpcmBank;
   unsigned char sampleBank;
   unsigned char writeOscBuf;
   unsigned char apuType;
+  unsigned char linearCount;
+  signed char nextDPCMFreq;
+  signed char nextDPCMDelta;
+  signed char lastDPCMFreq;
   bool dpcmMode;
+  bool dpcmModeDefault;
   bool dacAntiClickOn;
   bool useNP;
+  bool goingToLoop;
+  bool countMode;
+  bool isE;
   struct NESAPU* nes;
   xgm::NES_APU* nes1_NP;
   xgm::NES_DMC* nes2_NP;
+  xgm::I5E01_APU* e1_NP;
+  xgm::I5E01_DMC* e2_NP;
   unsigned char regPool[128];
+  unsigned int sampleOffDPCM[256];
+  DivMemoryComposition memCompo;
 
+  friend void putDispatchChip(void*,int);
   friend void putDispatchChan(void*,int,int);
 
   void doWrite(unsigned short addr, unsigned char data);
   unsigned char calcDPCMRate(int inRate);
-  void acquire_puNES(short* bufL, short* bufR, size_t start, size_t len);
-  void acquire_NSFPlay(short* bufL, short* bufR, size_t start, size_t len);
+  void acquire_puNES(short** buf, size_t len);
+  void acquire_NSFPlay(short** buf, size_t len);
+  void acquire_NSFPlayE(short** buf, size_t len);
 
   public:
-    void acquire(short* bufL, short* bufR, size_t start, size_t len);
+    void acquire(short** buf, size_t len);
     int dispatch(DivCommand c);
     void* getChanState(int chan);
     DivMacroInt* getChanMacroInt(int ch);
@@ -101,7 +99,8 @@ class DivPlatformNES: public DivDispatch {
     float getPostAmp();
     unsigned char readDMC(unsigned short addr);
     void setNSFPlay(bool use);
-    void setFlags(unsigned int flags);
+    void set5E01(bool use);
+    void setFlags(const DivConfig& flags);
     void notifyInsDeletion(void* ins);
     void poke(unsigned int addr, unsigned short val);
     void poke(std::vector<DivRegWrite>& wlist);
@@ -109,8 +108,10 @@ class DivPlatformNES: public DivDispatch {
     const void* getSampleMem(int index);
     size_t getSampleMemCapacity(int index);
     size_t getSampleMemUsage(int index);
-    void renderSamples();
-    int init(DivEngine* parent, int channels, int sugRate, unsigned int flags);
+    bool isSampleLoaded(int index, int sample);
+    const DivMemoryComposition* getMemCompo(int index);
+    void renderSamples(int chipID);
+    int init(DivEngine* parent, int channels, int sugRate, const DivConfig& flags);
     void quit();
     ~DivPlatformNES();
 };

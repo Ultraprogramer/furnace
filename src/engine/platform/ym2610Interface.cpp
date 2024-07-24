@@ -1,6 +1,6 @@
 /**
  * Furnace Tracker - multi-system chiptune tracker
- * Copyright (C) 2021-2022 tildearrow and contributors
+ * Copyright (C) 2021-2024 tildearrow and contributors
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -17,9 +17,7 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
-#include "sound/ymfm/ymfm.h"
-#include "ym2610.h"
-#include "../engine.h"
+#include "ym2610shared.h"
 
 uint8_t DivYM2610Interface::ymfm_external_read(ymfm::access_class type, uint32_t address) {
   switch (type) {

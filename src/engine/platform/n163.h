@@ -1,6 +1,6 @@
 /**
  * Furnace Tracker - multi-system chiptune tracker
- * Copyright (C) 2021-2022 tildearrow and contributors
+ * Copyright (C) 2021-2024 tildearrow and contributors
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -21,78 +21,58 @@
 #define _N163_H
 
 #include "../dispatch.h"
-#include <queue>
-#include "../macroInt.h"
+#include "../../fixedQueue.h"
 #include "../waveSynth.h"
-#include "sound/n163/n163.hpp"
+#include "vgsound_emu/src/n163/n163.hpp"
 
 class DivPlatformN163: public DivDispatch {
-  struct Channel {
-    int freq, baseFreq, pitch, pitch2, note;
-    short ins, wave, wavePos, waveLen;
-    unsigned char waveMode;
-    short loadWave, loadPos, loadLen;
-    unsigned char loadMode;
-    bool active, insChanged, freqChanged, volumeChanged, waveChanged, waveUpdated, keyOn, keyOff, inPorta;
-    signed char vol, outVol, resVol;
-    DivMacroInt std;
+  struct Channel: public SharedChannel<signed char> {
+    signed char resVol;
+    short wave, wavePos, waveLen;
+    short curWavePos, curWaveLen;
+    bool waveMode;
+    bool volumeChanged;
+    bool waveChanged, waveUpdated;
     DivWaveSynth ws;
-    void macroInit(DivInstrument* which) {
-      std.init(which);
-      pitch2=0;
-    }
     Channel():
-      freq(0),
-      baseFreq(0),
-      pitch(0),
-      pitch2(0),
-      note(0),
-      ins(-1),
+      SharedChannel<signed char>(15),
+      resVol(15),
       wave(-1),
       wavePos(0),
       waveLen(0),
+      curWavePos(0),
+      curWaveLen(0),
       waveMode(0),
-      loadWave(-1),
-      loadPos(0),
-      loadLen(0),
-      loadMode(0),
-      active(false),
-      insChanged(true),
-      freqChanged(false),
       volumeChanged(false),
       waveChanged(false),
-      waveUpdated(false),
-      keyOn(false),
-      keyOff(false),
-      inPorta(false),
-      vol(15),
-      outVol(15),
-      resVol(15) {}
+      waveUpdated(false) {}
   };
   Channel chan[8];
   DivDispatchOscBuffer* oscBuf[8];
   bool isMuted[8];
   struct QueuedWrite {
-      unsigned char addr;
-      unsigned char val;
-      unsigned char mask;
-      QueuedWrite(unsigned char a, unsigned char v, unsigned char m=~0): addr(a), val(v), mask(m) {}
+    unsigned char addr;
+    unsigned char val;
+    unsigned char mask;
+    QueuedWrite(): addr(0), val(0), mask(~0) {}
+    QueuedWrite(unsigned char a, unsigned char v, unsigned char m=~0): addr(a), val(v), mask(m) {}
   };
-  std::queue<QueuedWrite> writes;
+  FixedQueue<QueuedWrite,2048> writes;
   unsigned char initChanMax;
   unsigned char chanMax;
-  short loadWave, loadPos, loadLen;
-  unsigned char loadMode;
-  bool multiplex;
+  short loadWave, loadPos;
+  bool multiplex, lenCompensate;
 
   n163_core n163;
   unsigned char regPool[128];
+  DivMemoryComposition memCompo;
   void updateWave(int ch, int wave, int pos, int len);
   void updateWaveCh(int ch);
+  friend void putDispatchChip(void*,int);
   friend void putDispatchChan(void*,int,int);
 
   public:
-    void acquire(short* bufL, short* bufR, size_t start, size_t len);
+    void acquire(short** buf, size_t len);
     int dispatch(DivCommand c);
     void* getChanState(int chan);
     DivMacroInt* getChanMacroInt(int ch);
@@ -103,14 +83,15 @@ class DivPlatformN163: public DivDispatch {
     void forceIns();
     void tick(bool sysTick=true);
     void muteChannel(int ch, bool mute);
-    void setFlags(unsigned int flags);
+    const DivMemoryComposition* getMemCompo(int index);
+    void setFlags(const DivConfig& flags);
     void notifyWaveChange(int wave);
     void notifyInsChange(int ins);
     void notifyInsDeletion(void* ins);
     void poke(unsigned int addr, unsigned short val);
     void poke(std::vector<DivRegWrite>& wlist);
     const char** getRegisterSheet();
-    int init(DivEngine* parent, int channels, int sugRate, unsigned int flags);
+    int init(DivEngine* parent, int channels, int sugRate, const DivConfig& flags);
     void quit();
     ~DivPlatformN163();
 };

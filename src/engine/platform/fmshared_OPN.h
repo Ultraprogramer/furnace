@@ -1,6 +1,6 @@
 /**
  * Furnace Tracker - multi-system chiptune tracker
- * Copyright (C) 2021-2022 tildearrow and contributors
+ * Copyright (C) 2021-2024 tildearrow and contributors
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -21,6 +21,7 @@
 #define _FMSHARED_OPN_H
 
 #include "fmsharedbase.h"
+#include "../../../extern/opn/ym3438.h"
 
 #define PLEASE_HELP_ME(_targetChan) \
   int boundaryBottom=parent->calcBaseFreq(chipClock,CHIP_FREQBASE,0,false); \
@@ -83,6 +84,8 @@
     return 2; \
   }
 
+#define IS_EXTCH_MUTED (isOpMuted[0] && isOpMuted[1] && isOpMuted[2] && isOpMuted[3])
+
 class DivPlatformOPN: public DivPlatformFMBase {
   protected:
     const unsigned short ADDR_MULT_DT=0x30;
@@ -101,17 +104,112 @@ class DivPlatformOPN: public DivPlatformFMBase {
       0x00, 0x04, 0x08, 0x0c
     };
 
+    struct OPNChannel: public FMChannel {
+      unsigned char psgMode, autoEnvNum, autoEnvDen;
+      bool furnacePCM;
+      int sample, macroVolMul;
+
+      OPNChannel():
+        FMChannel(),
+        psgMode(1),
+        autoEnvNum(0),
+        autoEnvDen(0),
+        furnacePCM(false),
+        sample(-1),
+        macroVolMul(255) {}
+    };
+
+    struct OPNChannelStereo: public OPNChannel {
+      unsigned char pan;
+      OPNChannelStereo():
+        OPNChannel(),
+        pan(3) {}
+    };
+
+    struct OPNOpChannel: public SharedChannel<int> {
+      unsigned char freqH, freqL;
+      int portaPauseFreq;
+      signed char konCycles;
+      bool mask, hardReset;
+      OPNOpChannel():
+        SharedChannel<int>(0),
+        freqH(0),
+        freqL(0),
+        portaPauseFreq(0),
+        konCycles(0),
+        mask(true),
+        hardReset(false) {}
+    };
+
+    struct OPNOpChannelStereo: public OPNOpChannel {
+    unsigned char pan;
+      OPNOpChannelStereo():
+        OPNOpChannel(),
+        pan(3) {}
+    };
+
+    const int extChanOffs, psgChanOffs, adpcmAChanOffs, adpcmBChanOffs, chanNum;
+
     double fmFreqBase;
     unsigned int fmDivBase;
     unsigned int ayDiv;
-    bool extSys;
+    unsigned char csmChan;
+    unsigned char lfoValue;
+    unsigned char lastExtChPan;
+    unsigned short ssgVol;
+    unsigned short fmVol;
+    bool extSys, fbAllOps;
+    unsigned char useCombo;
 
-    DivPlatformOPN(double f=9440540.0, unsigned int d=72, unsigned int a=32, bool isExtSys=false):
+    DivConfig ayFlags;
+
+    friend void putDispatchChip(void*,int);
+    friend void putDispatchChan(void*,int,int);
+    DivPlatformOPN(int ext, int psg, int adpcmA, int adpcmB, int chanCount, double f=9440540.0, unsigned int d=72, unsigned int a=32, bool isExtSys=false, unsigned char cc=255):
       DivPlatformFMBase(),
+      extChanOffs(ext),
+      psgChanOffs(psg),
+      adpcmAChanOffs(adpcmA),
+      adpcmBChanOffs(adpcmB),
+      chanNum(chanCount),
       fmFreqBase(f),
       fmDivBase(d),
       ayDiv(a),
-      extSys(isExtSys) {}
+      csmChan(cc),
+      lfoValue(0),
+      lastExtChPan(3),
+      ssgVol(128),
+      fmVol(256),
+      extSys(isExtSys),
+      fbAllOps(false),
+      useCombo(0) {}
+  public:
+    void setCombo(unsigned char combo) {
+      useCombo=combo;
+    }
+    virtual int mapVelocity(int ch, float vel) {
+      if (ch==csmChan) return vel*127.0;
+      if (ch==adpcmBChanOffs) return vel*255.0;
+      if (ch>=adpcmAChanOffs) {
+        if (vel==0) return 0;
+        if (vel>=1.0) return 31;
+        return CLAMP(round(32.0-(56.0-log2(vel*127.0)*8.0)),0,31);
+      }
+      if (ch>=psgChanOffs) return round(15.0*pow(vel,0.33));
+      return DivPlatformFMBase::mapVelocity(ch,vel);
+    }
+    virtual float getGain(int ch, int vol) {
+      if (vol==0) return 0;
+      if (ch==csmChan) return 1;
+      if (ch==adpcmBChanOffs) return (float)vol/255.0;
+      if (ch>=adpcmAChanOffs) {
+        return 1.0/pow(10.0,(float)(31-vol)*0.75/20.0);
+      }
+      if (ch>=psgChanOffs) {
+        return 1.0/pow(10.0,(float)(15-vol)*1.5/20.0);
+      }
+      return DivPlatformFMBase::getGain(ch,vol);
+    }
 
 };
 

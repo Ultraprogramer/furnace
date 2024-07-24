@@ -1,6 +1,6 @@
 /**
  * Furnace Tracker - multi-system chiptune tracker
- * Copyright (C) 2021-2022 tildearrow and contributors
+ * Copyright (C) 2021-2024 tildearrow and contributors
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -23,7 +23,7 @@
 #include <string.h>
 #include <math.h>
 
-#define rWrite(a,v) if (!skipRegisterWrites) {writes.emplace(a,v); if (dumpWrites) {addWrite(a,v);} }
+#define rWrite(a,v) if (!skipRegisterWrites) {writes.push(QueuedWrite(a,v)); if (dumpWrites) {addWrite(a,v);} }
 
 #define CHIP_DIVIDER 2
 
@@ -56,7 +56,7 @@ const char** DivPlatformSAA1099::getRegisterSheet() {
   return regCheatSheetSAA;
 }
 
-void DivPlatformSAA1099::acquire_saaSound(short* bufL, short* bufR, size_t start, size_t len) {
+void DivPlatformSAA1099::acquire_saaSound(short** buf, size_t len) {
   if (saaBufLen<len*2) {
     saaBufLen=len*2;
     for (int i=0; i<2; i++) {
@@ -71,14 +71,21 @@ void DivPlatformSAA1099::acquire_saaSound(short* bufL, short* bufR, size_t start
     writes.pop();
   }
   saa_saaSound->GenerateMany((unsigned char*)saaBuf[0],len,oscBuf);
+#ifdef TA_BIG_ENDIAN
   for (size_t i=0; i<len; i++) {
-    bufL[i+start]=saaBuf[0][i<<1];
-    bufR[i+start]=saaBuf[0][1+(i<<1)];
+    buf[0][i]=(short)((((unsigned short)saaBuf[0][i<<1])<<8)|(((unsigned short)saaBuf[0][i<<1])>>8));
+    buf[1][i]=(short)((((unsigned short)saaBuf[0][1+(i<<1)])<<8)|(((unsigned short)saaBuf[0][1+(i<<1)])>>8));
   }
+#else
+  for (size_t i=0; i<len; i++) {
+    buf[0][i]=saaBuf[0][i<<1];
+    buf[1][i]=saaBuf[0][1+(i<<1)];
+  }
+#endif
 }
 
-void DivPlatformSAA1099::acquire(short* bufL, short* bufR, size_t start, size_t len) {
-  acquire_saaSound(bufL,bufR,start,len);
+void DivPlatformSAA1099::acquire(short** buf, size_t len) {
+  acquire_saaSound(buf,len);
 }
 
 inline unsigned char applyPan(unsigned char vol, unsigned char pan) {
@@ -97,7 +104,9 @@ void DivPlatformSAA1099::tick(bool sysTick) {
         rWrite(i,applyPan(chan[i].outVol&15,chan[i].pan));
       }
     }
-    if (chan[i].std.arp.had) {
+    if (NEW_ARP_STRAT) {
+      chan[i].handleArp();
+    } else if (chan[i].std.arp.had) {
       if (!chan[i].inPorta) {
         chan[i].baseFreq=NOTE_PERIODIC(parent->calcArp(chan[i].note,chan[i].std.arp.val));
       }
@@ -144,7 +153,7 @@ void DivPlatformSAA1099::tick(bool sysTick) {
       rWrite(0x18+(i/3),saaEnv[i/3]);
     }
     if (chan[i].freqChanged || chan[i].keyOn || chan[i].keyOff) {
-      chan[i].freq=parent->calcFreq(chan[i].baseFreq,chan[i].pitch,true,0,chan[i].pitch2,chipClock,CHIP_DIVIDER);
+      chan[i].freq=parent->calcFreq(chan[i].baseFreq,chan[i].pitch,chan[i].fixedArp?chan[i].baseNoteOverride:chan[i].arpOff,chan[i].fixedArp,true,0,chan[i].pitch2,chipClock,CHIP_DIVIDER);
       if (chan[i].freq>65535) chan[i].freq=65535;
       if (chan[i].freq>=32768) {
         chan[i].freqH=7;
@@ -301,8 +310,14 @@ int DivPlatformSAA1099::dispatch(DivCommand c) {
       saaEnv[c.chan/3]=c.value;
       rWrite(0x18+(c.chan/3),c.value);
       break;
-    case DIV_ALWAYS_SET_VOLUME:
-      return 0;
+    case DIV_CMD_MACRO_OFF:
+      chan[c.chan].std.mask(c.value,true);
+      break;
+    case DIV_CMD_MACRO_ON:
+      chan[c.chan].std.mask(c.value,false);
+      break;
+    case DIV_CMD_MACRO_RESTART:
+      chan[c.chan].std.restart(c.value);
       break;
     case DIV_CMD_GET_VOLMAX:
       return 15;
@@ -311,7 +326,7 @@ int DivPlatformSAA1099::dispatch(DivCommand c) {
       if (chan[c.chan].active && c.value2) {
         if (parent->song.resetMacroOnPorta) chan[c.chan].macroInit(parent->getIns(chan[c.chan].ins,DIV_INS_SAA1099));
       }
-      if (!chan[c.chan].inPorta && c.value && !parent->song.brokenPortaArp && chan[c.chan].std.arp.will) chan[c.chan].baseFreq=NOTE_PERIODIC(chan[c.chan].note);
+      if (!chan[c.chan].inPorta && c.value && !parent->song.brokenPortaArp && chan[c.chan].std.arp.will && !NEW_ARP_STRAT) chan[c.chan].baseFreq=NOTE_PERIODIC(chan[c.chan].note);
       chan[c.chan].inPorta=c.value;
       break;
     case DIV_CMD_PRE_NOTE:
@@ -348,6 +363,10 @@ void* DivPlatformSAA1099::getChanState(int ch) {
 
 DivMacroInt* DivPlatformSAA1099::getChanMacroInt(int ch) {
   return &chan[ch].std;
+}
+
+unsigned short DivPlatformSAA1099::getPan(int ch) {
+  return ((chan[ch].pan&0xf0)<<4)|(chan[ch].pan&15);
 }
 
 DivDispatchOscBuffer* DivPlatformSAA1099::getOscBuffer(int ch) {
@@ -404,8 +423,8 @@ void DivPlatformSAA1099::reset() {
   rWrite(0x1c,1);
 }
 
-bool DivPlatformSAA1099::isStereo() {
-  return true;
+int DivPlatformSAA1099::getOutputCount() {
+  return 2;
 }
 
 int DivPlatformSAA1099::getPortaFloor(int ch) {
@@ -416,21 +435,27 @@ bool DivPlatformSAA1099::keyOffAffectsArp(int ch) {
   return true;
 }
 
+bool DivPlatformSAA1099::getLegacyAlwaysSetVolume() {
+  return false;
+}
+
 void DivPlatformSAA1099::notifyInsDeletion(void* ins) {
   for (int i=0; i<6; i++) {
     chan[i].std.notifyInsDeletion((DivInstrument*)ins);
   }
 }
 
-void DivPlatformSAA1099::setFlags(unsigned int flags) {
-  if (flags==2) {
+void DivPlatformSAA1099::setFlags(const DivConfig& flags) {
+  int clockSel=flags.getInt("clockSel",0);
+  if (clockSel==2) {
     chipClock=COLOR_PAL*8.0/5.0;
-  } else if (flags==1) {
+  } else if (clockSel==1) {
     chipClock=COLOR_NTSC*2.0;
   } else {
     chipClock=8000000;
   }
-  rate=chipClock/32;
+  CHECK_CUSTOM_CLOCK;
+  rate=chipClock/coreQuality;
 
   for (int i=0; i<6; i++) {
     oscBuf[i]->rate=rate;
@@ -448,7 +473,33 @@ void DivPlatformSAA1099::poke(std::vector<DivRegWrite>& wlist) {
   for (DivRegWrite& i: wlist) rWrite(i.addr,i.val);
 }
 
-int DivPlatformSAA1099::init(DivEngine* p, int channels, int sugRate, unsigned int flags) {
+void DivPlatformSAA1099::setCoreQuality(unsigned char q) {
+  switch (q) {
+    case 0:
+      coreQuality=256;
+      break;
+    case 1:
+      coreQuality=128;
+      break;
+    case 2:
+      coreQuality=64;
+      break;
+    case 3:
+      coreQuality=32;
+      break;
+    case 4:
+      coreQuality=8;
+      break;
+    case 5:
+      coreQuality=1;
+      break;
+    default:
+      coreQuality=32;
+      break;
+  }
+}
+
+int DivPlatformSAA1099::init(DivEngine* p, int channels, int sugRate, const DivConfig& flags) {
   parent=p;
   dumpWrites=false;
   skipRegisterWrites=false;

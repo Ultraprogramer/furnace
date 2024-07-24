@@ -1,6 +1,6 @@
 /**
  * Furnace Tracker - multi-system chiptune tracker
- * Copyright (C) 2021-2022 tildearrow and contributors
+ * Copyright (C) 2021-2024 tildearrow and contributors
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -42,7 +42,11 @@ const bool isTopKey[12]={
 
 #define VALUE_DIGIT(x,label) \
   if (ImGui::Button(label,buttonSize)) { \
-    valueInput(x,false); \
+    if (curWindow==GUI_WINDOW_ORDERS && orderEditMode>0) { \
+      orderInput(x); \
+    } else { \
+      valueInput(x,false); \
+    } \
   }
 
 void FurnaceGUI::drawPiano() {
@@ -54,16 +58,16 @@ void FurnaceGUI::drawPiano() {
   if (!pianoOpen) return;
   if (mobileUI) {
     ImGui::SetNextWindowPos(ImVec2(patWindowPos.x,patWindowPos.y+patWindowSize.y));
-    ImGui::SetNextWindowSize(portrait?ImVec2(scrW*dpiScale,0.4*scrW*dpiScale):ImVec2(scrW*dpiScale-(0.16*scrH*dpiScale),0.3*scrH*dpiScale));
+    ImGui::SetNextWindowSize(portrait?ImVec2(canvasW,0.4*canvasW):ImVec2(canvasW-(0.16*canvasH),0.3*canvasH));
   }
-  if (ImGui::Begin("Piano",&pianoOpen,((pianoOptions)?0:ImGuiWindowFlags_NoTitleBar)|ImGuiWindowFlags_NoScrollbar|ImGuiWindowFlags_NoScrollWithMouse|globalWinFlags)) {
+  if (ImGui::Begin("Piano",&pianoOpen,((pianoOptions)?0:ImGuiWindowFlags_NoTitleBar)|ImGuiWindowFlags_NoScrollbar|ImGuiWindowFlags_NoScrollWithMouse|globalWinFlags,_("Piano"))) {
     bool oldPianoKeyPressed[180];
     memcpy(oldPianoKeyPressed,pianoKeyPressed,180*sizeof(bool));
     memset(pianoKeyPressed,0,180*sizeof(bool));
     if (ImGui::BeginTable("PianoLayout",((pianoOptions && (!mobileUI || !portrait))?2:1),ImGuiTableFlags_BordersInnerV)) {
       int& off=(e->isPlaying() || pianoSharePosition)?pianoOffset:pianoOffsetEdit;
       int& oct=(e->isPlaying() || pianoSharePosition)?pianoOctaves:pianoOctavesEdit;
-      bool view=(pianoView==2)?(!e->isPlaying()):pianoView;
+      bool view=(pianoView==PIANO_LAYOUT_AUTOMATIC)?(!e->isPlaying()):pianoView;
       if (pianoOptions && (!mobileUI || !portrait)) {
         ImGui::TableSetupColumn("c0",ImGuiTableColumnFlags_WidthFixed);
       }
@@ -76,11 +80,11 @@ void FurnaceGUI::drawPiano() {
         ImVec2 optionSize=ImVec2((mobileUI && portrait)?((ImGui::GetContentRegionAvail().x-ImGui::GetStyle().ItemSpacing.x*5.0f)/6.0f):(1.2f*optionSizeY),optionSizeY);
         if (pianoOptionsSet) {
           if (ImGui::Button("OFF##PianoNOff",optionSize)) {
-            if (edit) noteInput(0,100);
+            if (edit) noteInput(0,GUI_NOTE_OFF);
           }
           ImGui::SameLine();
           if (ImGui::Button("===##PianoNRel",optionSize)) {
-            if (edit) noteInput(0,101);
+            if (edit) noteInput(0,GUI_NOTE_OFF_RELEASE);
           }
         } else {
           if (ImGui::Button(ICON_FA_ARROW_LEFT "##PianoLeft",optionSize)) {
@@ -95,31 +99,39 @@ void FurnaceGUI::drawPiano() {
         }
         ImGui::SameLine();
         ImGui::Button(ICON_FA_ELLIPSIS_V "##PianoOptions",optionSize);
+        if (ImGui::IsItemHovered()) {
+          ImGui::SetTooltip(_("Options"));
+        }
         if (ImGui::BeginPopupContextItem("PianoOptions",ImGuiPopupFlags_MouseButtonLeft)) {
-          ImGui::Text("Key layout:");
-          if (ImGui::RadioButton("Automatic",pianoView==2)) {
-            pianoView=2;
+          ImGui::Text(_("Key layout:"));
+          ImGui::Indent();
+          if (ImGui::RadioButton(_("Automatic"),pianoView==PIANO_LAYOUT_AUTOMATIC)) {
+            pianoView=PIANO_LAYOUT_AUTOMATIC;
           }
-          if (ImGui::RadioButton("Standard",pianoView==0)) {
-            pianoView=0;
+          if (ImGui::RadioButton(_("Standard"),pianoView==PIANO_LAYOUT_STANDARD)) {
+            pianoView=PIANO_LAYOUT_STANDARD;
           }
-          if (ImGui::RadioButton("Continuous",pianoView==1)) {
-            pianoView=1;
+          if (ImGui::RadioButton(_("Continuous"),pianoView==PIANO_LAYOUT_CONTINUOUS)) {
+            pianoView=PIANO_LAYOUT_CONTINUOUS;
           }
-          ImGui::Text("Value input pad:");
-          if (ImGui::RadioButton("Disabled",pianoInputPadMode==0)) {
-            pianoInputPadMode=0;
+          ImGui::Unindent();
+          ImGui::Text(_("Value input pad:"));
+          ImGui::Indent();
+          if (ImGui::RadioButton(_("Disabled"),pianoInputPadMode==PIANO_INPUT_PAD_DISABLE)) {
+            pianoInputPadMode=PIANO_INPUT_PAD_DISABLE;
           }
-          if (ImGui::RadioButton("Replace piano",pianoInputPadMode==1)) {
-            pianoInputPadMode=1;
+          if (ImGui::RadioButton(_("Replace piano"),pianoInputPadMode==PIANO_INPUT_PAD_REPLACE)) {
+            pianoInputPadMode=PIANO_INPUT_PAD_REPLACE;
           }
-          if (ImGui::RadioButton("Split (automatic)",pianoInputPadMode==2)) {
-            pianoInputPadMode=2;
+          if (ImGui::RadioButton(_("Split (automatic)"),pianoInputPadMode==PIANO_INPUT_PAD_SPLIT_AUTO)) {
+            pianoInputPadMode=PIANO_INPUT_PAD_SPLIT_AUTO;
           }
-          if (ImGui::RadioButton("Split (always visible)",pianoInputPadMode==3)) {
-            pianoInputPadMode=3;
+          if (ImGui::RadioButton(_("Split (always visible)"),pianoInputPadMode==PIANO_INPUT_PAD_SPLIT_VISIBLE)) {
+            pianoInputPadMode=PIANO_INPUT_PAD_SPLIT_VISIBLE;
           }
-          ImGui::Checkbox("Share play/edit offset/range",&pianoSharePosition);
+          ImGui::Unindent();
+          ImGui::Checkbox(_("Share play/edit offset/range"),&pianoSharePosition);
+          ImGui::Checkbox(_("Read-only (can't input notes)"),&pianoReadonly);
           ImGui::EndPopup();
         }
 
@@ -129,7 +141,7 @@ void FurnaceGUI::drawPiano() {
 
         if (pianoOptionsSet) {
           if (ImGui::Button("REL##PianoNMRel",optionSize)) {
-            if (edit) noteInput(0,102);
+            if (edit) noteInput(0,GUI_NOTE_RELEASE);
           }
           ImGui::SameLine();
           if (ImGui::Button(ICON_FA_TIMES "##PianoDelP",optionSize)) {
@@ -158,7 +170,7 @@ void FurnaceGUI::drawPiano() {
       }
 
       ImGui::TableNextColumn();
-      if (pianoInputPadMode==1 && cursor.xFine>0) {
+      if (pianoInputPadMode==PIANO_INPUT_PAD_REPLACE && ((cursor.xFine>0 && curWindow==GUI_WINDOW_PATTERN) || (curWindow==GUI_WINDOW_ORDERS && orderEditMode>0))) {
         ImVec2 buttonSize=ImGui::GetContentRegionAvail();
         if (ImGui::BeginTable("InputPadP",8,ImGuiTableFlags_SizingFixedSame)) {
           ImGui::TableNextRow();
@@ -219,11 +231,15 @@ void FurnaceGUI::drawPiano() {
         // render piano
         //ImGui::ItemSize(size,ImGui::GetStyle().FramePadding.y);
         if (ImGui::ItemAdd(rect,ImGui::GetID("pianoDisplay"))) {
-          ImGui::ItemHoverable(rect,ImGui::GetID("pianoDisplay"));
+          bool canInput=false;
+          if (!pianoReadonly && ImGui::ItemHoverable(rect,ImGui::GetID("pianoDisplay"),0)) {
+            canInput=true;
+            ImGui::InhibitInertialScroll();
+          }
           if (view) {
             int notes=oct*12;
             // evaluate input
-            for (TouchPoint& i: activePoints) {
+            if (canInput) for (TouchPoint& i: activePoints) {
               if (rect.Contains(ImVec2(i.x,i.y))) {
                 int note=(((i.x-rect.Min.x)/(rect.Max.x-rect.Min.x))*notes)+12*off;
                 if (note<0) continue;
@@ -263,7 +279,7 @@ void FurnaceGUI::drawPiano() {
           } else {
             int bottomNotes=7*oct;
             // evaluate input
-            for (TouchPoint& i: activePoints) {
+            if (canInput) for (TouchPoint& i: activePoints) {
               if (rect.Contains(ImVec2(i.x,i.y))) {
                 // top
                 int o=((i.x-rect.Min.x)/(rect.Max.x-rect.Min.x))*oct;
@@ -374,9 +390,22 @@ void FurnaceGUI::drawPiano() {
           int note=i-60;
           if (!pianoKeyPressed[i]) {
             if (pianoKeyPressed[i]!=oldPianoKeyPressed[i]) {
-              e->synchronized([this,note]() {
-                e->autoNoteOff(-1,note);
-              });
+              switch (curWindow) {
+                case GUI_WINDOW_WAVE_LIST:
+                case GUI_WINDOW_WAVE_EDIT:
+                  e->stopWavePreview();
+                  break;
+                case GUI_WINDOW_SAMPLE_LIST:
+                case GUI_WINDOW_SAMPLE_EDIT:
+                  e->stopSamplePreview();
+                  break;
+                default:
+                  e->synchronized([this,note]() {
+                    e->autoNoteOff(-1,note);
+                    failedNoteOn=false;
+                  });
+                  break;
+              }
             }
           }
         }
@@ -385,10 +414,26 @@ void FurnaceGUI::drawPiano() {
           int note=i-60;
           if (pianoKeyPressed[i]) {
             if (pianoKeyPressed[i]!=oldPianoKeyPressed[i]) {
-              e->synchronized([this,note]() {
-                e->autoNoteOn(-1,curIns,note);
-              });
-              if (edit) noteInput(note,0);
+              switch (curWindow) {
+                case GUI_WINDOW_WAVE_LIST:
+                case GUI_WINDOW_WAVE_EDIT:
+                  e->previewWave(curWave,note);
+                  break;
+                case GUI_WINDOW_SAMPLE_LIST:
+                case GUI_WINDOW_SAMPLE_EDIT:
+                  e->previewSample(curSample,note);
+                  break;
+                default:
+                  if (sampleMapWaitingInput) {
+                    alterSampleMap(1,note);
+                  } else {
+                    e->synchronized([this,note]() {
+                      if (!e->autoNoteOn(-1,curIns,note)) failedNoteOn=true;
+                    });
+                    if (edit && curWindow!=GUI_WINDOW_INS_LIST && curWindow!=GUI_WINDOW_INS_EDIT) noteInput(note,0);
+                  }
+                  break;
+              }
             }
           }
         }
@@ -397,13 +442,14 @@ void FurnaceGUI::drawPiano() {
       ImGui::EndTable();
     }
   }
-  if (ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows)) curWindow=GUI_WINDOW_PIANO;
+  // don't worry about it
+  //if (ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows)) curWindow=GUI_WINDOW_PIANO;
   ImGui::End();
 
   // draw input pad if necessary
-  if ((pianoInputPadMode==2 && cursor.xFine>0) || pianoInputPadMode==3) {
+  if ((curWindow==GUI_WINDOW_ORDERS || curWindow==GUI_WINDOW_PATTERN || !mobileUI) && ((pianoInputPadMode==PIANO_INPUT_PAD_SPLIT_AUTO && (cursor.xFine>0 || (curWindow==GUI_WINDOW_ORDERS && orderEditMode>0))) || pianoInputPadMode==PIANO_INPUT_PAD_SPLIT_VISIBLE)) {
     if (ImGui::Begin("Input Pad",NULL,ImGuiWindowFlags_NoTitleBar)) {
-      ImGui::BeginDisabled(cursor.xFine==0);
+      ImGui::BeginDisabled(cursor.xFine==0 && !(curWindow==GUI_WINDOW_ORDERS && orderEditMode>0));
       if (ImGui::BeginTable("InputPad",3,ImGuiTableFlags_Borders)) {
         ImGui::TableNextRow();
         ImGui::TableNextColumn();
@@ -458,7 +504,8 @@ void FurnaceGUI::drawPiano() {
       }
       ImGui::EndDisabled();
     }
-    if (ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows)) curWindow=GUI_WINDOW_PIANO;
+    // don't worry about it either
+    //if (ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows)) curWindow=GUI_WINDOW_PIANO;
     ImGui::End();
   }
 }

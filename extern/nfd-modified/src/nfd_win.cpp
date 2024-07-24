@@ -7,6 +7,12 @@
 
 #ifdef __MINGW32__
 // Explicitly setting NTDDI version, this is necessary for the MinGW compiler
+#ifdef NTDDI_VERSION
+#undef NTDDI_VERSION
+#endif
+#ifdef _WIN32_WINNT
+#undef _WIN32_WINNT
+#endif
 #define NTDDI_VERSION NTDDI_VISTA
 #define _WIN32_WINNT _WIN32_WINNT_VISTA
 #endif
@@ -30,6 +36,9 @@
 // hack I know
 #include "../../../src/utfutils.h"
 
+// hack 2...
+#include "../../../src/ta-log.h"
+
 class NFDWinEvents: public IFileDialogEvents {
   nfdselcallback_t selCallback;
   size_t refCount;
@@ -38,27 +47,27 @@ class NFDWinEvents: public IFileDialogEvents {
   }
   public:
     IFACEMETHODIMP QueryInterface(REFIID riid, void** ppv) {
-      printf("QueryInterface called DAMN IT\n");
+      logV("%p: QueryInterface called DAMN IT",(const void*)this);
       *ppv=NULL;
       return E_NOTIMPL;
     }
 
     IFACEMETHODIMP_(ULONG) AddRef() {
-      printf("AddRef() called\n");
+      logV("%p: AddRef() called",(const void*)this);
       return InterlockedIncrement(&refCount);
     }
 
     IFACEMETHODIMP_(ULONG) Release() {
-      printf("Release() called\n");
+      logV("%p: Release() called",(const void*)this);
       LONG ret=InterlockedDecrement(&refCount);
       if (ret==0) {
-        printf("Destroying the final object.\n");
+        logV("%p: Destroying the final object.",(const void*)this);
         delete this;
       }
       return ret;
     }
 
-    IFACEMETHODIMP OnFileOk(IFileDialog*) { return E_NOTIMPL; }
+    IFACEMETHODIMP OnFileOk(IFileDialog*) { return S_OK; }
     IFACEMETHODIMP OnFolderChange(IFileDialog*) { return E_NOTIMPL; }
     IFACEMETHODIMP OnFolderChanging(IFileDialog*, IShellItem*) { return E_NOTIMPL; }
     IFACEMETHODIMP OnOverwrite(IFileDialog*, IShellItem*, FDE_OVERWRITE_RESPONSE*) { return E_NOTIMPL; }
@@ -67,30 +76,40 @@ class NFDWinEvents: public IFileDialogEvents {
 
     IFACEMETHODIMP OnSelectionChange(IFileDialog* dialog) {
       // Get the file name
+      logV("%p: OnSelectionChange() called",(const void*)this);
       ::IShellItem *shellItem(NULL);
+      logV("%p: GetCurrentSelection",(const void*)this);
       HRESULT result = dialog->GetCurrentSelection(&shellItem);
       if ( !SUCCEEDED(result) )
       {
-        printf("failure!\n");
+        logV("%p: failure!",(const void*)this);
         return S_OK;
       }
       wchar_t *filePath(NULL);
       result = shellItem->GetDisplayName(::SIGDN_FILESYSPATH, &filePath);
       if ( !SUCCEEDED(result) )
       {
-          printf("GDN failure!\n");
+          logV("%p: GDN failure!",(const void*)this);
           shellItem->Release();
           return S_OK;
       }
       std::string utf8FilePath=utf16To8(filePath);
-      if (selCallback!=NULL) selCallback(utf8FilePath.c_str());
-      printf("I got you for a value of %s\n",utf8FilePath.c_str());
+      if (selCallback!=NULL) {
+        logV("%p: calling back.",(const void*)this);
+        selCallback(utf8FilePath.c_str());
+        logV("%p: end of callback",(const void*)this);
+      } else {
+        logV("%p: no callback.",(const void*)this);
+      }
+      logV("%p: I got you for a value of %s",(const void*)this,utf8FilePath.c_str());
       shellItem->Release();
+      logV("%p: shellItem->Release()",(const void*)this);
       return S_OK;
     }
     NFDWinEvents(nfdselcallback_t callback):
       selCallback(callback),
       refCount(1) {
+        logV("%p: CONSTRUCT!",(const void*)this);
     }
 };
 
@@ -191,7 +210,9 @@ static void CopyNFDCharToWChar( const nfdchar_t *inStr, wchar_t **outStr )
 
 #ifdef _DEBUG
     int inStrCharacterCount = static_cast<int>(NFDi_UTF8_Strlen(inStr));
-    assert( ret == inStrCharacterCount );
+    if (ret!=inStrCharacterCount) {
+      logW("length does not match! %d != %d",ret,inStrCharacterCount);
+    }
 #else
     _NFD_UNUSED(ret);
 #endif
@@ -517,6 +538,9 @@ nfdresult_t NFD_OpenDialogMultiple( const std::vector<std::string>& filterList,
                                     nfdselcallback_t selCallback )
 {
     nfdresult_t nfdResult = NFD_ERROR;
+    NFDWinEvents* winEvents;
+    bool hasEvents=true;
+    DWORD eventID=0;
 
 
     HRESULT coResult = COMInit();
@@ -549,6 +573,16 @@ nfdresult_t NFD_OpenDialogMultiple( const std::vector<std::string>& filterList,
     if ( !SetDefaultPath( fileOpenDialog, defaultPath ) )
     {
         goto end;
+    }
+
+    // Pass the callback
+    winEvents=new NFDWinEvents(selCallback);
+    if ( !SUCCEEDED(fileOpenDialog->Advise(winEvents,&eventID)) ) {
+      // error... ignore
+      hasEvents=false;
+      winEvents->Release();
+    } else {
+      winEvents->Release();
     }
 
     // Set a flag for multiple options
@@ -598,8 +632,12 @@ nfdresult_t NFD_OpenDialogMultiple( const std::vector<std::string>& filterList,
     }
 
 end:
-    if ( fileOpenDialog )
+    if (fileOpenDialog) {
+        if (hasEvents) {
+          fileOpenDialog->Unadvise(eventID);
+        }
         fileOpenDialog->Release();
+    }
 
     COMUninit(coResult);
     
@@ -642,6 +680,21 @@ nfdresult_t NFD_SaveDialog( const std::vector<std::string>& filterList,
     // Set the default path
     if ( !SetDefaultPath( fileSaveDialog, defaultPath ) )
     {
+        goto end;
+    }
+
+    // Set a flag for no history
+    DWORD dwFlags;
+    result = fileSaveDialog->GetOptions(&dwFlags);
+    if ( !SUCCEEDED(result) )
+    {
+        NFDi_SetError("Could not get options.");
+        goto end;
+    }
+    result = fileSaveDialog->SetOptions(dwFlags | FOS_DONTADDTORECENT);
+    if ( !SUCCEEDED(result) )
+    {
+        NFDi_SetError("Could not set options.");
         goto end;
     }
 

@@ -1,6 +1,6 @@
 /**
  * Furnace Tracker - multi-system chiptune tracker
- * Copyright (C) 2021-2022 tildearrow and contributors
+ * Copyright (C) 2021-2024 tildearrow and contributors
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -21,74 +21,62 @@
 #define _LYNX_H
 
 #include "../dispatch.h"
-#include "../macroInt.h"
 #include "sound/lynx/Mikey.hpp"
 
 class DivPlatformLynx: public DivDispatch {
 
   struct MikeyFreqDiv {
-    uint8_t clockDivider;
-    uint8_t backup;
+    unsigned char clockDivider;
+    unsigned char backup;
 
     MikeyFreqDiv(int frequency);
   };
 
   struct MikeyDuty {
-    uint8_t int_feedback7;
-    uint8_t feedback;
+    unsigned char int_feedback7;
+    unsigned char feedback;
+    int val;
 
     MikeyDuty(int duty);
   };
 
-  struct Channel {
-    DivMacroInt std;
+  struct Channel: public SharedChannel<signed char> {
     MikeyFreqDiv fd;
     MikeyDuty duty;
-    int baseFreq, pitch, pitch2, note, actualNote, lfsr, ins, sample, samplePos, sampleAccum, sampleBaseFreq, sampleFreq;
+    int actualNote, lfsr, sample, samplePos, sampleAccum, sampleBaseFreq, sampleFreq;
     unsigned char pan;
-    bool active, insChanged, freqChanged, keyOn, keyOff, inPorta, pcm;
-    signed char vol, outVol;
-    void macroInit(DivInstrument* which) {
-      std.init(which);
-      pitch2=0;
-    }
+    bool pcm, setPos;
+    int macroVolMul;
     Channel():
-      std(),
+      SharedChannel<signed char>(127),
       fd(0),
       duty(0),
-      baseFreq(0),
-      pitch(0),
-      pitch2(0),
-      note(0),
       actualNote(0),
       lfsr(-1),
-      ins(-1),
       sample(-1),
       samplePos(0),
       sampleAccum(0),
       sampleBaseFreq(0),
       sampleFreq(0),
       pan(0xff),
-      active(false),
-      insChanged(true),
-      freqChanged(false),
-      keyOn(false),
-      keyOff(false),
-      inPorta(false),
       pcm(false),
-      vol(127),
-      outVol(127) {}
+      setPos(false),
+      macroVolMul(127) {}
   };
   Channel chan[4];
   DivDispatchOscBuffer* oscBuf[4];
   bool isMuted[4];
-  std::unique_ptr<Lynx::Mikey> mikey;
+  bool tuned;
+  std::unique_ptr<Lynx::Mikey> mikey;  
+  friend void putDispatchChip(void*,int);
   friend void putDispatchChan(void*,int,int);
   public:
-    void acquire(short* bufL, short* bufR, size_t start, size_t len);
+    void acquire(short** buf, size_t len);
     int dispatch(DivCommand c);
     void* getChanState(int chan);
     DivMacroInt* getChanMacroInt(int ch);
+    unsigned short getPan(int chan);
+    DivSamplePos getSamplePos(int ch);
     DivDispatchOscBuffer* getOscBuffer(int chan);
     unsigned char* getRegisterPool();
     int getRegisterPoolSize();
@@ -96,15 +84,17 @@ class DivPlatformLynx: public DivDispatch {
     void forceIns();
     void tick(bool sysTick=true);
     void muteChannel(int ch, bool mute);
-    bool isStereo();
+    int getOutputCount();
     bool keyOffAffectsArp(int ch);
     bool keyOffAffectsPorta(int ch);
+    bool getLegacyAlwaysSetVolume();
     //int getPortaFloor(int ch);
+    void setFlags(const DivConfig& flags);
     void notifyInsDeletion(void* ins);
     void poke(unsigned int addr, unsigned short val);
     void poke(std::vector<DivRegWrite>& wlist);
     const char** getRegisterSheet();
-    int init(DivEngine* parent, int channels, int sugRate, unsigned int flags);
+    int init(DivEngine* parent, int channels, int sugRate, const DivConfig& flags);
     void quit();
     ~DivPlatformLynx();
 };

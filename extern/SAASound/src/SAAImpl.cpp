@@ -26,7 +26,9 @@ m_uParamRate(0),
 m_nClockRate(EXTERNAL_CLK_HZ),
 m_nSampleRate(SAMPLE_RATE_HZ),
 m_nOversample(DEFAULT_OVERSAMPLE),
-m_bHighpass(false)
+m_bHighpass(false),
+filterout_z1_left_mixed(0),
+filterout_z1_right_mixed(0)
 {
 #ifdef USE_CONFIG_FILE
 	m_Config.ReadConfig();
@@ -185,8 +187,6 @@ void CSAASoundInternal::SetSoundParameters(SAAPARAM uParam)
 
 	// set filter properties from uParam
 	m_uParam = (m_uParam & ~SAAP_MASK_FILTER) | (uParam & SAAP_MASK_FILTER);
-	 
-	m_bHighpass=true;
 }
 
 void CSAASoundInternal::SetSampleRate(unsigned int nSampleRate)
@@ -230,12 +230,12 @@ unsigned short CSAASoundInternal::GetCurrentBytesPerSample(void)
 	}
 }
 
-unsigned long CSAASoundInternal::GetCurrentSampleRate(void)
+unsigned int CSAASoundInternal::GetCurrentSampleRate(void)
 {
 	return CSAASound::GetSampleRate(m_uParamRate);
 }
 
-/*static*/ unsigned long CSAASound::GetSampleRate(SAAPARAM uParam) // static member function
+/*static*/ unsigned int CSAASound::GetSampleRate(SAAPARAM uParam) // static member function
 {
 	switch (uParam & SAAP_MASK_SAMPLERATE)
 	{
@@ -298,14 +298,13 @@ void scale_for_output(unsigned int left_input, unsigned int right_input,
 	*pBuffer++ = (right_output >> 8) & 0x00ff;
 }
 
-void CSAASoundInternal::GenerateMany(BYTE* pBuffer, unsigned long nSamples, DivDispatchOscBuffer** oscBuf)
+void CSAASoundInternal::GenerateMany(BYTE* pBuffer, unsigned int nSamples, DivDispatchOscBuffer** oscBuf)
 {
 	unsigned int left_mixed, right_mixed;
-	static double filterout_z1_left_mixed = 0, filterout_z1_right_mixed = 0;
 
 #if defined(DEBUGSAA) || defined(USE_CONFIG_FILE)
 	BYTE* pBufferStart = pBuffer;
-	unsigned long nTotalSamples = nSamples;
+	unsigned int nTotalSamples = nSamples;
 #endif
 
 #if defined(DO_BOOST)
@@ -389,7 +388,7 @@ void CSAASoundInternal::GenerateMany(BYTE* pBuffer, unsigned long nSamples, DivD
 	if (m_Config.m_bGeneratePcmLogs)
 	{
 #endif
-		m_pcmfile.write((const char *)pBufferStart, nTotalSamples * (unsigned long)GetCurrentBytesPerSample());
+		m_pcmfile.write((const char *)pBufferStart, nTotalSamples * (unsigned int)GetCurrentBytesPerSample());
 		m_nDebugSample += nTotalSamples;
 #ifdef USE_CONFIG_FILE
 	}

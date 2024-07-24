@@ -1,6 +1,6 @@
 /**
  * Furnace Tracker - multi-system chiptune tracker
- * Copyright (C) 2021-2022 tildearrow and contributors
+ * Copyright (C) 2021-2024 tildearrow and contributors
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -23,8 +23,16 @@
 #include <string.h>
 #include <math.h>
 
-#define rWrite(a,v) if (!skipRegisterWrites) {writes.emplace(a,v); if (dumpWrites) {addWrite(a,v);} }
-#define rWriteDelay(a,v,d) if (!skipRegisterWrites) {writes.emplace(a,v,d); if (dumpWrites) {addWrite(a,v);} }
+#define rWrite(a,v) if (!skipRegisterWrites) {writes.push(QueuedWrite(a,v)); if (dumpWrites) {addWrite(a,v);} }
+#define rWriteDelay(a,v,d) if (!skipRegisterWrites) {writes.push(QueuedWrite(a,v,d)); if (dumpWrites) {addWrite(a,v);} }
+
+#define setPhrase(c) \
+  if (isBanked) { \
+    rWrite(16+(c),bankedPhrase[chan[(c)].sample].bank); \
+    rWrite(0,0x80|((c)<<5)|bankedPhrase[chan[(c)].sample].phrase); \
+  } else { \
+    rWrite(0,0x80|chan[(c)].sample); \
+  }
 
 const char** DivPlatformMSM6295::getRegisterSheet() {
   return NULL;
@@ -34,11 +42,17 @@ u8 DivPlatformMSM6295::read_byte(u32 address) {
   if (adpcmMem==NULL || address>=getSampleMemCapacity(0)) {
     return 0;
   }
+  if (isBanked) {
+    if (address<0x400) {
+      return adpcmMem[(bank[(address>>8)&0x3]<<16)|(address&0x3ff)];
+    }
+    return adpcmMem[(bank[(address>>16)&0x3]<<16)|(address&0xffff)];
+  }
   return adpcmMem[address&0x3ffff];
 }
 
-void DivPlatformMSM6295::acquire(short* bufL, short* bufR, size_t start, size_t len) {
-  for (size_t h=start; h<start+len; h++) {
+void DivPlatformMSM6295::acquire(short** buf, size_t len) {
+  for (size_t h=0; h<len; h++) {
     if (delay<=0) {
       if (!writes.empty()) {
         QueuedWrite& w=writes.front();
@@ -62,38 +76,73 @@ void DivPlatformMSM6295::acquire(short* bufL, short* bufR, size_t start, size_t 
           case 17:
           case 18:
           case 19:
+            bank[w.addr-16]=w.val;
             break;
         }
         writes.pop();
         delay=w.delay;
       }
     } else {
-      delay--;
+      delay-=3;
     }
     
     msm.tick();
+    msm.tick();
+    msm.tick();
   
-    bufL[h]=msm.out()<<4;
+    buf[0][h]=msm.out()<<4;
 
     if (++updateOsc>=22) {
       updateOsc=0;
-      // TODO: per-channel osc
       for (int i=0; i<4; i++) {
-        oscBuf[i]->data[oscBuf[i]->needle++]=msm.m_voice[i].m_muted?0:(msm.m_voice[i].m_out<<6);
+        oscBuf[i]->data[oscBuf[i]->needle++]=msm.voice_out(i)<<5;
       }
     }
   }
 }
 
 void DivPlatformMSM6295::tick(bool sysTick) {
-  // nothing
+  for (int i=0; i<4; i++) {
+    if (!parent->song.disableSampleMacro) {
+      chan[i].std.next();
+      if (chan[i].std.vol.had) {
+        chan[i].outVol=VOL_SCALE_LOG_BROKEN(chan[i].std.vol.val,chan[i].vol,8);
+      }
+      if (chan[i].std.duty.had) {
+        if (rateSel!=(chan[i].std.duty.val&1)) {
+          rateSel=chan[i].std.duty.val&1;
+          rWrite(12,!rateSel);
+        }
+      }
+      if (chan[i].std.phaseReset.had) {
+        if (chan[i].std.phaseReset.val && chan[i].active) {
+          chan[i].keyOn=true;
+        }
+      }
+    }
+    if (chan[i].keyOn || chan[i].keyOff) {
+      rWriteDelay(0,(8<<i),60); // turn off
+      if (chan[i].active && !chan[i].keyOff) {
+        if (chan[i].sample>=0 && chan[i].sample<parent->song.sampleLen) {
+          setPhrase(i);
+          rWrite(0,(16<<i)|(8-chan[i].outVol)); // turn on
+        } else {
+          chan[i].sample=-1;
+        }
+      } else {
+        chan[i].sample=-1;
+      }
+      chan[i].keyOn=false;
+      chan[i].keyOff=false;
+    }
+  }
 }
 
 int DivPlatformMSM6295::dispatch(DivCommand c) {
   switch (c.cmd) {
     case DIV_CMD_NOTE_ON: {
       DivInstrument* ins=parent->getIns(chan[c.chan].ins,DIV_INS_FM);
-      if (ins->type==DIV_INS_AMIGA) {
+      if (ins->type==DIV_INS_MSM6295 || ins->type==DIV_INS_AMIGA) {
         chan[c.chan].furnacePCM=true;
       } else {
         chan[c.chan].furnacePCM=false;
@@ -104,17 +153,16 @@ int DivPlatformMSM6295::dispatch(DivCommand c) {
         if (!chan[c.chan].std.vol.will) {
           chan[c.chan].outVol=chan[c.chan].vol;
         }
-        chan[c.chan].sample=ins->amiga.getSample(c.value);
+        if (c.value!=DIV_NOTE_NULL) chan[c.chan].sample=ins->amiga.getSample(c.value);
         if (chan[c.chan].sample>=0 && chan[c.chan].sample<parent->song.sampleLen) {
           //DivSample* s=parent->getSample(chan[c.chan].sample);
           if (c.value!=DIV_NOTE_NULL) {
             chan[c.chan].note=c.value;
-            chan[c.chan].freqChanged=true;
           }
           chan[c.chan].active=true;
           chan[c.chan].keyOn=true;
-          rWriteDelay(0,(8<<c.chan),60); // turn off
-          rWrite(0,0x80|chan[c.chan].sample); // set phrase
+          rWriteDelay(0,(8<<c.chan),180); // turn off
+          setPhrase(c.chan);
           rWrite(0,(16<<c.chan)|(8-chan[c.chan].outVol)); // turn on
         } else {
           break;
@@ -123,13 +171,13 @@ int DivPlatformMSM6295::dispatch(DivCommand c) {
         chan[c.chan].sample=-1;
         chan[c.chan].macroInit(NULL);
         chan[c.chan].outVol=chan[c.chan].vol;
-        if ((12*sampleBank+c.value%12)>=parent->song.sampleLen) {
+        if ((12*sampleBank+c.value%12)<0 || (12*sampleBank+c.value%12)>=parent->song.sampleLen) {
           break;
         }
         //DivSample* s=parent->getSample(12*sampleBank+c.value%12);
         chan[c.chan].sample=12*sampleBank+c.value%12;
-        rWriteDelay(0,(8<<c.chan),60); // turn off
-        rWrite(0,0x80|chan[c.chan].sample); // set phrase
+        rWriteDelay(0,(8<<c.chan),180); // turn off
+        setPhrase(c.chan);
         rWrite(0,(16<<c.chan)|(8-chan[c.chan].outVol)); // turn on
       }
       break;
@@ -138,21 +186,21 @@ int DivPlatformMSM6295::dispatch(DivCommand c) {
       chan[c.chan].keyOff=true;
       chan[c.chan].keyOn=false;
       chan[c.chan].active=false;
-      rWriteDelay(0,(8<<c.chan),60); // turn off
+      rWriteDelay(0,(8<<c.chan),180); // turn off
       chan[c.chan].macroInit(NULL);
       break;
     case DIV_CMD_NOTE_OFF_ENV:
       chan[c.chan].keyOff=true;
       chan[c.chan].keyOn=false;
       chan[c.chan].active=false;
-      rWriteDelay(0,(8<<c.chan),60); // turn off
+      rWriteDelay(0,(8<<c.chan),180); // turn off
       chan[c.chan].std.release();
       break;
     case DIV_CMD_ENV_RELEASE:
       chan[c.chan].std.release();
       break;
     case DIV_CMD_VOLUME: {
-      chan[c.chan].vol=c.value;
+      chan[c.chan].vol=MIN(8,c.value);
       if (!chan[c.chan].std.vol.has) {
         chan[c.chan].outVol=c.value;
       }
@@ -187,8 +235,14 @@ int DivPlatformMSM6295::dispatch(DivCommand c) {
     case DIV_CMD_LEGATO: {
       break;
     }
-    case DIV_ALWAYS_SET_VOLUME:
-      return 0;
+    case DIV_CMD_MACRO_OFF:
+      chan[c.chan].std.mask(c.value,true);
+      break;
+    case DIV_CMD_MACRO_ON:
+      chan[c.chan].std.mask(c.value,false);
+      break;
+    case DIV_CMD_MACRO_RESTART:
+      chan[c.chan].std.restart(c.value);
       break;
     case DIV_CMD_GET_VOLMAX:
       return 8;
@@ -206,7 +260,7 @@ int DivPlatformMSM6295::dispatch(DivCommand c) {
 
 void DivPlatformMSM6295::muteChannel(int ch, bool mute) {
   isMuted[ch]=mute;
-  msm.m_voice[ch].m_muted=mute;
+  msm.voice_mute(ch,mute);
 }
 
 void DivPlatformMSM6295::forceIns() {
@@ -255,6 +309,7 @@ void DivPlatformMSM6295::reset() {
   for (int i=0; i<4; i++) {
     chan[i]=DivPlatformMSM6295::Channel();
     chan[i].std.setEngine(parent);
+    msm.voice_mute(i,isMuted[i]);
   }
   for (int i=0; i<4; i++) {
     chan[i].vol=8;
@@ -264,11 +319,18 @@ void DivPlatformMSM6295::reset() {
   sampleBank=0;
   rateSel=rateSelInit;
   rWrite(12,!rateSelInit);
+  if (isBanked) {
+    rWrite(14,0x81);
+  }
 
   delay=0;
 }
 
 bool DivPlatformMSM6295::keyOffAffectsArp(int ch) {
+  return false;
+}
+
+bool DivPlatformMSM6295::getLegacyAlwaysSetVolume() {
   return false;
 }
 
@@ -285,6 +347,9 @@ void DivPlatformMSM6295::notifyInsChange(int ins) {
 }
 
 void DivPlatformMSM6295::notifyInsDeletion(void* ins) {
+  for (int i=0; i<4; i++) {
+    chan[i].std.notifyInsDeletion((DivInstrument*)ins);
+  }
 }
 
 const void* DivPlatformMSM6295::getSampleMem(int index) {
@@ -292,58 +357,146 @@ const void* DivPlatformMSM6295::getSampleMem(int index) {
 }
 
 size_t DivPlatformMSM6295::getSampleMemCapacity(int index) {
-  return index == 0 ? 262144 : 0;
+  return index == 0 ? (isBanked?16777216:262144) : 0;
 }
 
 size_t DivPlatformMSM6295::getSampleMemUsage(int index) {
   return index == 0 ? adpcmMemLen : 0;
 }
 
-void DivPlatformMSM6295::renderSamples() {
-  memset(adpcmMem,0,getSampleMemCapacity(0));
+bool DivPlatformMSM6295::isSampleLoaded(int index, int sample) {
+  if (index!=0) return false;
+  if (sample<0 || sample>255) return false;
+  return sampleLoaded[sample];
+}
+
+const DivMemoryComposition* DivPlatformMSM6295::getMemCompo(int index) {
+  if (index!=0) return NULL;
+  return &memCompo;
+}
+
+void DivPlatformMSM6295::renderSamples(int sysID) {
+  unsigned int sampleOffVOX[256];
+
+  memset(adpcmMem,0,16777216);
+  memset(sampleOffVOX,0,256*sizeof(unsigned int));
+  memset(sampleLoaded,0,256*sizeof(bool));
+  for (int i=0; i<256; i++) {
+    bankedPhrase[i].bank=0;
+    bankedPhrase[i].phrase=0;
+  }
+
+  memCompo=DivMemoryComposition();
+  memCompo.name="Sample ROM";
+
+  memCompo.entries.push_back(DivMemoryEntry(DIV_MEMORY_RESERVED,"Phrase Book",-1,0,128*8));
 
   // sample data
   size_t memPos=128*8;
-  int sampleCount=parent->song.sampleLen;
-  if (sampleCount>128) sampleCount=128;
-  for (int i=0; i<sampleCount; i++) {
-    DivSample* s=parent->song.sample[i];
-    int paddedLen=s->lengthVOX;
-    if (memPos>=getSampleMemCapacity(0)) {
-      logW("out of ADPCM memory for sample %d!",i);
-      break;
-    }
-    if (memPos+paddedLen>=getSampleMemCapacity(0)) {
-      memcpy(adpcmMem+memPos,s->dataVOX,getSampleMemCapacity(0)-memPos);
-      logW("out of ADPCM memory for sample %d!",i);
-    } else {
-      memcpy(adpcmMem+memPos,s->dataVOX,paddedLen);
-    }
-    s->offVOX=memPos;
-    memPos+=paddedLen;
-  }
-  adpcmMemLen=memPos+256;
+  if (isBanked) {
+    int bankInd=0;
+    int phraseInd=0;
+    for (int i=0; i<parent->song.sampleLen; i++) {
+      DivSample* s=parent->song.sample[i];
+      if (!s->renderOn[0][sysID]) {
+        sampleOffVOX[i]=0;
+        continue;
+      }
 
-  // phrase book
-  for (int i=0; i<sampleCount; i++) {
-    DivSample* s=parent->song.sample[i];
-    int endPos=s->offVOX+s->lengthVOX;
-    adpcmMem[i*8]=(s->offVOX>>16)&0xff;
-    adpcmMem[1+i*8]=(s->offVOX>>8)&0xff;
-    adpcmMem[2+i*8]=(s->offVOX)&0xff;
-    adpcmMem[3+i*8]=(endPos>>16)&0xff;
-    adpcmMem[4+i*8]=(endPos>>8)&0xff;
-    adpcmMem[5+i*8]=(endPos)&0xff;
+      int paddedLen=s->lengthVOX;
+      // fit to single bank size
+      if (paddedLen>65536-0x400) {
+        paddedLen=65536-0x400;
+      }
+      // 32 phrase per bank
+      if ((phraseInd>=32)||((memPos&0xff0000)!=((memPos+paddedLen)&0xff0000))) {
+        memPos=((memPos+0xffff)&0xff0000)+0x400;
+        bankInd++;
+        phraseInd=0;
+      }
+      if (memPos>=getSampleMemCapacity(0)) {
+        logW("out of ADPCM memory for sample %d!",i);
+        break;
+      }
+      if (memPos+paddedLen>=getSampleMemCapacity(0)) {
+        memcpy(adpcmMem+memPos,s->dataVOX,getSampleMemCapacity(0)-memPos);
+        logW("out of ADPCM memory for sample %d!",i);
+      } else {
+        memcpy(adpcmMem+memPos,s->dataVOX,paddedLen);
+        sampleLoaded[i]=true;
+      }
+      sampleOffVOX[i]=memPos;
+      bankedPhrase[i].bank=bankInd;
+      bankedPhrase[i].phrase=phraseInd;
+      bankedPhrase[i].length=paddedLen;
+      memCompo.entries.push_back(DivMemoryEntry(DIV_MEMORY_SAMPLE,"Sample",i,memPos,memPos+paddedLen));
+      memPos+=paddedLen;
+      phraseInd++;
+    }
+    adpcmMemLen=memPos+256;
+
+    // phrase book
+    for (int i=0; i<parent->song.sampleLen; i++) {
+      int endPos=sampleOffVOX[i]+bankedPhrase[i].length;
+      for (int b=0; b<4; b++) {
+        unsigned int bankedAddr=((unsigned int)bankedPhrase[i].bank<<16)+(b<<8)+(bankedPhrase[i].phrase*8);
+        adpcmMem[bankedAddr]=b;
+        adpcmMem[bankedAddr+1]=(sampleOffVOX[i]>>8)&0xff;
+        adpcmMem[bankedAddr+2]=(sampleOffVOX[i])&0xff;
+        adpcmMem[bankedAddr+3]=b;
+        adpcmMem[bankedAddr+4]=(endPos>>8)&0xff;
+        adpcmMem[bankedAddr+5]=(endPos)&0xff;
+      }
+    }
+  } else {
+    int sampleCount=parent->song.sampleLen;
+    if (sampleCount>127) sampleCount=127;
+    for (int i=0; i<sampleCount; i++) {
+      DivSample* s=parent->song.sample[i];
+      if (!s->renderOn[0][sysID]) {
+        sampleOffVOX[i]=0;
+        continue;
+      }
+
+      int paddedLen=s->lengthVOX;
+      if (memPos>=getSampleMemCapacity(0)) {
+        logW("out of ADPCM memory for sample %d!",i);
+        break;
+      }
+      if (memPos+paddedLen>=getSampleMemCapacity(0)) {
+        memcpy(adpcmMem+memPos,s->dataVOX,getSampleMemCapacity(0)-memPos);
+        logW("out of ADPCM memory for sample %d!",i);
+      } else {
+        memcpy(adpcmMem+memPos,s->dataVOX,paddedLen);
+        sampleLoaded[i]=true;
+      }
+      sampleOffVOX[i]=memPos;
+      memCompo.entries.push_back(DivMemoryEntry(DIV_MEMORY_SAMPLE,"Sample",i,memPos,memPos+paddedLen));
+      memPos+=paddedLen;
+    }
+    adpcmMemLen=memPos+256;
+
+    // phrase book
+    for (int i=0; i<sampleCount; i++) {
+      DivSample* s=parent->song.sample[i];
+      int endPos=sampleOffVOX[i]+s->lengthVOX;
+      adpcmMem[i*8]=(sampleOffVOX[i]>>16)&0xff;
+      adpcmMem[1+i*8]=(sampleOffVOX[i]>>8)&0xff;
+      adpcmMem[2+i*8]=(sampleOffVOX[i])&0xff;
+      adpcmMem[3+i*8]=(endPos>>16)&0xff;
+      adpcmMem[4+i*8]=(endPos>>8)&0xff;
+      adpcmMem[5+i*8]=(endPos)&0xff;
+    }
   }
+
+  memCompo.capacity=getSampleMemCapacity(0);
+  memCompo.used=adpcmMemLen;
 }
 
-void DivPlatformMSM6295::setFlags(unsigned int flags) {
-  rateSelInit=(flags>>7)&1;
-  switch (flags&0x7f) {
-    default:
-    case 0:
-      chipClock=4000000/4;
-      break;
+void DivPlatformMSM6295::setFlags(const DivConfig& flags) {
+  rateSelInit=flags.getBool("rateSel",false);
+  isBanked=flags.getBool("isBanked",false);
+  switch (flags.getInt("clockSel",0)) {
     case 1:
       chipClock=4224000/4;
       break;
@@ -386,7 +539,14 @@ void DivPlatformMSM6295::setFlags(unsigned int flags) {
     case 14:
       chipClock=COLOR_NTSC/3.0;
       break;
+    case 15:
+      chipClock=3200000;
+      break;
+    default:
+      chipClock=4000000/4;
+      break;
   }
+  CHECK_CUSTOM_CLOCK;
   rate=chipClock/3;
   for (int i=0; i<4; i++) {
     oscBuf[i]->rate=rate/22;
@@ -395,11 +555,12 @@ void DivPlatformMSM6295::setFlags(unsigned int flags) {
     rWrite(12,!rateSelInit);
     rateSel=rateSelInit;
   }
+  rWrite(14,isBanked?0x81:0);
 }
 
-int DivPlatformMSM6295::init(DivEngine* p, int channels, int sugRate, unsigned int flags) {
+int DivPlatformMSM6295::init(DivEngine* p, int channels, int sugRate, const DivConfig& flags) {
   parent=p;
-  adpcmMem=new unsigned char[getSampleMemCapacity(0)];
+  adpcmMem=new unsigned char[16777216];
   adpcmMemLen=0;
   dumpWrites=false;
   skipRegisterWrites=false;

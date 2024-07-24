@@ -1,6 +1,6 @@
 /**
  * Furnace Tracker - multi-system chiptune tracker
- * Copyright (C) 2021-2022 tildearrow and contributors
+ * Copyright (C) 2021-2024 tildearrow and contributors
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -19,7 +19,7 @@
 
 #include <stdio.h>
 #include <stdint.h>
-#include <string>
+#include "pch.h"
 #ifdef HAVE_SDL2
 #include "SDL_events.h"
 #endif
@@ -28,12 +28,45 @@
 #include "engine/engine.h"
 
 #ifdef _WIN32
-#define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <combaseapi.h>
 #include <shellapi.h>
+#include "utfutils.h"
+#include "gui/shellScalingStub.h"
+
+typedef HRESULT (WINAPI *SPDA)(PROCESS_DPI_AWARENESS);
 #else
+#include <signal.h>
 #include <unistd.h>
+
+struct sigaction termsa;
+#endif
+
+#ifdef SUPPORT_XP
+#define TUT_INTRO_PLAYED true
+#else
+#define TUT_INTRO_PLAYED false
+#endif
+
+#ifdef HAVE_LOCALE
+#ifdef HAVE_MOMO
+#define TA_BINDTEXTDOMAIN momo_bindtextdomain
+#define TA_TEXTDOMAIN momo_textdomain
+#else
+#define TA_BINDTEXTDOMAIN bindtextdomain
+#define TA_TEXTDOMAIN textdomain
+#endif
+
+#ifdef HAVE_SETLOCALE
+#include <locale.h>
+#endif
+
+#ifndef LC_CTYPE
+#define LC_CTYPE 0
+#endif
+#ifndef LC_MESSAGES
+#define LC_MESSAGES 1
+#endif
 #endif
 
 #include "cli/cli.h"
@@ -52,10 +85,11 @@ FurnaceCLI cli;
 
 String outName;
 String vgmOutName;
+String zsmOutName;
 String cmdOutName;
-int loops=1;
 int benchMode=0;
-DivAudioExportModes outMode=DIV_EXPORT_MODE_ONE;
+int subsong=-1;
+DivAudioExportOptions exportOptions;
 
 #ifdef HAVE_GUI
 bool consoleMode=false;
@@ -63,10 +97,54 @@ bool consoleMode=false;
 bool consoleMode=true;
 #endif
 
+bool consoleNoStatus=false;
+bool consoleNoControls=false;
+
 bool displayEngineFailError=false;
-bool cmdOutBinary=false;
+bool displayLocaleFailError=false;
+bool vgmOutDirect=false;
+
+bool safeMode=false;
+bool safeModeWithAudio=false;
+
+bool infoMode=false;
 
 std::vector<TAParam> params;
+
+#ifdef HAVE_LOCALE
+char reqLocaleCopy[64];
+char localeDir[4096];
+
+const char* localeDirs[]={
+#ifdef __APPLE__
+  "../Resources/locale",
+#endif
+  "locale",
+  ".." DIR_SEPARATOR_STR "share" DIR_SEPARATOR_STR "locale",
+  ".." DIR_SEPARATOR_STR "po" DIR_SEPARATOR_STR "locale",
+#ifdef LOCALE_DIR
+  LOCALE_DIR,
+#endif
+  NULL
+};
+#endif
+
+bool getExePath(char* argv0, char* exePath, size_t maxSize) {
+  if (argv0==NULL) return false;
+#ifdef _WIN32
+  wchar_t exePathW[4096];
+  WString argv0W=utf8To16(argv0);
+  if (GetFullPathNameW(argv0W.c_str(),4095,exePathW,NULL)==0) return false;
+  String exePathS=utf16To8(exePathW);
+  strncpy(exePath,exePathS.c_str(),maxSize);
+#else
+  if (realpath(argv0,exePath)==NULL) return false;
+#endif
+  char* lastChar=strrchr(exePath,DIR_SEPARATOR);
+  if (lastChar==NULL) return false;
+  *lastChar=0;
+  return true;
+}
 
 TAParamResult pHelp(String) {
   printf("usage: furnace [params] [filename]\n"
@@ -90,8 +168,13 @@ TAParamResult pAudio(String val) {
     e.setAudio(DIV_AUDIO_JACK);
   } else if (val=="sdl") {
     e.setAudio(DIV_AUDIO_SDL);
+  } else if (val=="portaudio") {
+    e.setAudio(DIV_AUDIO_PORTAUDIO);
+  } else if (val=="pipe") {
+    e.setAudio(DIV_AUDIO_PIPE);
+    changeLogOutput(stderr);
   } else {
-    logE("invalid value for audio engine! valid values are: jack, sdl.");
+    logE("invalid value for audio engine! valid values are: jack, sdl, portaudio, pipe.");
     return TA_PARAM_ERROR;
   }
   return TA_PARAM_SUCCESS;
@@ -116,8 +199,44 @@ TAParamResult pConsole(String val) {
   return TA_PARAM_SUCCESS;
 }
 
-TAParamResult pBinary(String val) {
-  cmdOutBinary=true;
+TAParamResult pNoStatus(String val) {
+  consoleNoStatus=true;
+  return TA_PARAM_SUCCESS;
+}
+
+TAParamResult pNoControls(String val) {
+  consoleNoControls=true;
+  return TA_PARAM_SUCCESS;
+}
+
+TAParamResult pSafeMode(String val) {
+#ifdef HAVE_GUI
+  safeMode=true;
+  return TA_PARAM_SUCCESS;
+#else
+  logE("Furnace was compiled without the GUI. safe mode is pointless.");
+  return TA_PARAM_ERROR;
+#endif
+}
+
+TAParamResult pSafeModeAudio(String val) {
+#ifdef HAVE_GUI
+  safeMode=true;
+  safeModeWithAudio=true;
+  return TA_PARAM_SUCCESS;
+#else
+  logE("Furnace was compiled without the GUI. safe mode is pointless.");
+  return TA_PARAM_ERROR;
+#endif
+}
+
+TAParamResult pDirect(String val) {
+  vgmOutDirect=true;
+  return TA_PARAM_SUCCESS;
+}
+
+TAParamResult pInfo(String val) {
+  infoMode=true;
   return TA_PARAM_SUCCESS;
 }
 
@@ -141,7 +260,7 @@ TAParamResult pLogLevel(String val) {
 
 TAParamResult pVersion(String) {
   printf("Furnace version " DIV_VERSION ".\n\n");
-  printf("copyright (C) 2021-2022 tildearrow and contributors.\n");
+  printf("copyright (C) 2021-2024 tildearrow and contributors.\n");
   printf("licensed under the GNU General Public License version 2 or later\n");
   printf("<https://www.gnu.org/licenses/old-licenses/gpl-2.0.html>.\n\n");
   printf("this is free software with ABSOLUTELY NO WARRANTY.\n");
@@ -152,38 +271,68 @@ TAParamResult pVersion(String) {
   printf("- libsndfile by Erik de Castro Lopo and rest of libsndfile team (LGPLv2.1)\n");
   printf("- SDL2 by Sam Lantinga (zlib license)\n");
   printf("- zlib by Jean-loup Gailly and Mark Adler (zlib license)\n");
+  printf("- PortAudio (PortAudio license)\n");
+  printf("- Weak-JACK by x42 (GPLv2)\n");
   printf("- RtMidi by Gary P. Scavone (RtMidi license)\n");
   printf("- backward-cpp by Google (MIT)\n");
   printf("- Dear ImGui by Omar Cornut (MIT)\n");
+#ifdef HAVE_FREETYPE
+  printf("- FreeType (GPLv2)\n");
+#endif
   printf("- Portable File Dialogs by Sam Hocevar (WTFPL)\n");
   printf("- Native File Dialog (modified version) by Frogtoss Games (zlib license)\n");
   printf("- FFTW by Matteo Frigo and Steven G. Johnson (GPLv2)\n");
-  printf("- Nuked-OPM by Nuke.YKT (LGPLv2.1)\n");
-  printf("- Nuked-OPN2 by Nuke.YKT (LGPLv2.1)\n");
-  printf("- Nuked-OPL3 by Nuke.YKT (LGPLv2.1)\n");
-  printf("- Nuked-OPLL by Nuke.YKT (GPLv2)\n");
-  printf("- Nuked-PSG (modified version) by Nuke.YKT (GPLv2)\n");
+  printf("- Nuked-OPM by nukeykt (LGPLv2.1)\n");
+  printf("- Nuked-OPN2 by nukeykt (LGPLv2.1)\n");
+  printf("- Nuked-OPL3 by nukeykt (LGPLv2.1)\n");
+  printf("- Nuked-OPLL by nukeykt (GPLv2)\n");
+  printf("- Nuked-PSG (modified version) by nukeykt (GPLv2)\n");
+  printf("- YM3812-LLE by nukeykt (GPLv2)\n");
+  printf("- YMF262-LLE by nukeykt (GPLv2)\n");
+  printf("- YMF276-LLE by nukeykt (GPLv2)\n");
+  printf("- YM2608-LLE by nukeykt (GPLv2)\n");
+  printf("- ESFMu (modified version) by Kagamiin~ (LGPLv2.1)\n");
   printf("- ymfm by Aaron Giles (BSD 3-clause)\n");
+  printf("- emu2413 by Digital Sound Antiques (MIT)\n");
   printf("- adpcm by superctr (public domain)\n");
+  printf("- adpcm-xq by David Bryant (BSD 3-clause)\n");
   printf("- MAME SN76496 emulation core by Nicola Salmoria (BSD 3-clause)\n");
   printf("- MAME AY-3-8910 emulation core by Couriersud (BSD 3-clause)\n");
   printf("- MAME SAA1099 emulation core by Juergen Buchmueller and Manuel Abadia (BSD 3-clause)\n");
   printf("- MAME Namco WSG by Nicola Salmoria and Aaron Giles (BSD 3-clause)\n");
   printf("- MAME RF5C68 core by Olivier Galibert and Aaron Giles (BSD 3-clause)\n");
+  printf("- MAME MSM5232 core by Jarek Burczynski and Hiromitsu Shioya (GPLv2)\n");
   printf("- MAME MSM6258 core by Barry Rodewald (BSD 3-clause)\n");
   printf("- MAME YMZ280B core by Aaron Giles (BSD 3-clause)\n");
+  printf("- MAME GA20 core by Acho A. Tang and R. Belmont (BSD 3-clause)\n");
+  printf("- MAME SegaPCM core by Hiromitsu Shioya and Olivier Galibert (BSD 3-clause)\n");
   printf("- QSound core by superctr (BSD 3-clause)\n");
   printf("- VICE VIC-20 by Rami Rasanen and viznut (GPLv2)\n");
+  printf("- VICE TED by Andreas Boose, Tibor Biczo and Marco van den Heuvel (GPLv2)\n");
   printf("- VERA core by Frank van den Hoef (BSD 2-clause)\n");
   printf("- SAASound by Dave Hooper and Simon Owen (BSD 3-clause)\n");
   printf("- SameBoy by Lior Halphon (MIT)\n");
-  printf("- Mednafen PCE and WonderSwan by Mednafen Team (GPLv2)\n");
+  printf("- Mednafen PCE, WonderSwan and Virtual Boy by Mednafen Team (GPLv2)\n");
+  printf("- Mednafen T6W28 by Blargg (GPLv2)\n");
+  printf("- SNES DSP core by Blargg (LGPLv2.1)\n");
   printf("- puNES by FHorse (GPLv2)\n");
   printf("- NSFPlay by Brad Smith and Brezza (unknown open-source license)\n");
   printf("- reSID by Dag Lem (GPLv2)\n");
   printf("- reSIDfp by Dag Lem, Antti Lankila and Leandro Nini (GPLv2)\n");
+  printf("- dSID by DefleMask Team (based on jsSID by Hermit) (MIT)\n");
   printf("- Stella by Stella Team (GPLv2)\n");
-  printf("- vgsound_emu (first version) by cam900 (BSD 3-clause)\n");
+  printf("- vgsound_emu (second version, modified version) by cam900 (zlib license)\n");
+  printf("- Impulse Tracker GUS volume table by Jeffrey Lim (BSD 3-clause)\n");
+  printf("- Schism Tracker IT sample decompression (GPLv2)\n");
+  printf("- MAME GA20 core by Acho A. Tang, R. Belmont, Valley Bell (BSD 3-clause)\n");
+  printf("- Atari800 mzpokeysnd POKEY emulator by Michael Borisov (GPLv2)\n");
+  printf("- ASAP POKEY emulator by Piotr Fusik ported to C++ by laoo (GPLv2)\n");
+  printf("- SM8521 emulator (modified version) by cam900 (zlib license)\n");
+  printf("- D65010G031 emulator (modified version) by cam900 (zlib license)\n");
+  printf("- C140/C219 emulator (modified version) by cam900 (zlib license)\n");
+  printf("- PowerNoise emulator by scratchminer (MIT)\n");
+  printf("- ep128emu by Istvan Varga (GPLv2)\n");
+  printf("- NDS sound emulator by cam900 (zlib license)\n");
   return TA_PARAM_QUIT;
 }
 
@@ -208,9 +357,9 @@ TAParamResult pLoops(String val) {
   try {
     int count=std::stoi(val);
     if (count<0) {
-      loops=0;
+      exportOptions.loops=0;
     } else {
-      loops=count+1;
+      exportOptions.loops=count;
     }
   } catch (std::exception& e) {
     logE("loop count shall be a number.");
@@ -219,13 +368,28 @@ TAParamResult pLoops(String val) {
   return TA_PARAM_SUCCESS;
 }
 
+TAParamResult pSubSong(String val) {
+  try {
+    int v=std::stoi(val);
+    if (v<0) {
+      logE("sub-song shall be 0 or higher.");
+      return TA_PARAM_ERROR;
+    }
+    subsong=v;
+  } catch (std::exception& e) {
+    logE("sub-song shall be a number.");
+    return TA_PARAM_ERROR;
+  }
+  return TA_PARAM_SUCCESS;
+}
+
 TAParamResult pOutMode(String val) {
   if (val=="one") {
-    outMode=DIV_EXPORT_MODE_ONE;
+    exportOptions.mode=DIV_EXPORT_MODE_ONE;
   } else if (val=="persys") {
-    outMode=DIV_EXPORT_MODE_MANY_SYS;
+    exportOptions.mode=DIV_EXPORT_MODE_MANY_SYS;
   } else if (val=="perchan") {
-    outMode=DIV_EXPORT_MODE_MANY_CHAN;
+    exportOptions.mode=DIV_EXPORT_MODE_MANY_CHAN;
   } else {
     logE("invalid value for outmode! valid values are: one, persys and perchan.");
     return TA_PARAM_ERROR;
@@ -258,6 +422,12 @@ TAParamResult pVGMOut(String val) {
   return TA_PARAM_SUCCESS;
 }
 
+TAParamResult pZSMOut(String val) {
+  zsmOutName=val;
+  e.setAudio(DIV_AUDIO_DUMMY);
+  return TA_PARAM_SUCCESS;
+}
+
 TAParamResult pCmdOut(String val) {
   cmdOutName=val;
   e.setAudio(DIV_AUDIO_DUMMY);
@@ -276,17 +446,24 @@ bool needsValue(String param) {
 void initParams() {
   params.push_back(TAParam("h","help",false,pHelp,"","display this help"));
 
-  params.push_back(TAParam("a","audio",true,pAudio,"jack|sdl","set audio engine (SDL by default)"));
+  params.push_back(TAParam("a","audio",true,pAudio,"jack|sdl|portaudio|pipe","set audio engine (SDL by default)"));
   params.push_back(TAParam("o","output",true,pOutput,"<filename>","output audio to file"));
   params.push_back(TAParam("O","vgmout",true,pVGMOut,"<filename>","output .vgm data"));
+  params.push_back(TAParam("D","direct",false,pDirect,"","set VGM export direct stream mode"));
+  params.push_back(TAParam("Z","zsmout",true,pZSMOut,"<filename>","output .zsm data for Commander X16 Zsound"));
   params.push_back(TAParam("C","cmdout",true,pCmdOut,"<filename>","output command stream"));
-  params.push_back(TAParam("b","binary",false,pBinary,"","set command stream output format to binary"));
   params.push_back(TAParam("L","loglevel",true,pLogLevel,"debug|info|warning|error","set the log level (info by default)"));
-  params.push_back(TAParam("v","view",true,pView,"pattern|commands|nothing","set visualization (pattern by default)"));
+  params.push_back(TAParam("v","view",true,pView,"pattern|commands|nothing","set visualization (nothing by default)"));
+  params.push_back(TAParam("i","info",false,pInfo,"","get info about a song"));
   params.push_back(TAParam("c","console",false,pConsole,"","enable console mode"));
+  params.push_back(TAParam("n","nostatus",false,pNoStatus,"","disable playback status in console mode"));
+  params.push_back(TAParam("N","nocontrols",false,pNoControls,"","disable standard input controls in console mode"));
 
-  params.push_back(TAParam("l","loops",true,pLoops,"<count>","set number of loops (-1 means loop forever)"));
+  params.push_back(TAParam("l","loops",true,pLoops,"<count>","set number of loops"));
+  params.push_back(TAParam("s","subsong",true,pSubSong,"<number>","set sub-song"));
   params.push_back(TAParam("o","outmode",true,pOutMode,"one|persys|perchan","set file output mode"));
+  params.push_back(TAParam("S","safemode",false,pSafeMode,"","enable safe mode (software rendering and no audio)"));
+  params.push_back(TAParam("A","safeaudio",false,pSafeModeAudio,"","enable safe mode (with audio"));
 
   params.push_back(TAParam("B","benchmark",true,pBenchmark,"render|seek","run performance test"));
 
@@ -299,31 +476,172 @@ void reportError(String what) {
   logE("%s",what);
   MessageBox(NULL,what.c_str(),"Furnace",MB_OK|MB_ICONERROR);
 }
+#elif defined(ANDROID) || defined(__APPLE__)
+void reportError(String what) {
+  logE("%s",what);
+#ifdef HAVE_SDL2
+  SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR,"Error",what.c_str(),NULL);
+#endif
+}
 #else
 void reportError(String what) {
   logE("%s",what);
 }
 #endif
 
+#ifndef _WIN32
+#ifdef HAVE_GUI
+static void handleTermGUI(int) {
+  g.requestQuit();
+}
+#endif
+#endif
+
 // TODO: CoInitializeEx on Windows?
 // TODO: add crash log
 int main(int argc, char** argv) {
-  initLog();
+  // uncomment these if you want Furnace to play in the background on Android.
+  // not recommended. it lags.
+#if defined(HAVE_SDL2) && defined(ANDROID)
+  //SDL_SetHint(SDL_HINT_ANDROID_BLOCK_ON_PAUSE,"0");
+  //SDL_SetHint(SDL_HINT_ANDROID_BLOCK_ON_PAUSE_PAUSEAUDIO,"0");
+#endif
+
+  // Windows console thing - thanks dj.tuBIG/MaliceX
 #ifdef _WIN32
+#ifndef TA_SUBSYSTEM_CONSOLE
+  if (AttachConsole(ATTACH_PARENT_PROCESS)) {
+    freopen("CONOUT$", "w", stdout);
+    freopen("CONOUT$", "w", stderr);
+    freopen("CONIN$", "r", stdin);
+  }
+#endif
+#endif
+
+  srand(time(NULL));
+
+  initLog(stdout);
+#ifdef _WIN32
+  // set DPI awareness
+  HMODULE shcore=LoadLibraryW(L"shcore.dll");
+  if (shcore!=NULL) {
+    SPDA ta_SetProcessDpiAwareness=(SPDA)GetProcAddress(shcore,"SetProcessDpiAwareness");
+    if (ta_SetProcessDpiAwareness!=NULL) {
+      HRESULT result=ta_SetProcessDpiAwareness(PROCESS_PER_MONITOR_DPI_AWARE);
+      if (result!=S_OK) {
+        // ???
+      }
+    }
+    if (!FreeLibrary(shcore)) {
+      // ???
+    }
+  }
+
+  // co initialize ex
   HRESULT coResult=CoInitializeEx(NULL,COINIT_MULTITHREADED);
   if (coResult!=S_OK) {
     logE("CoInitializeEx failed!");
   }
 #endif
-#if !(defined(__APPLE__) || defined(_WIN32) || defined(ANDROID) || defined(__HAIKU__))
-  // workaround for Wayland HiDPI issue
-  if (getenv("SDL_VIDEODRIVER")==NULL) {
-    setenv("SDL_VIDEODRIVER","x11",1);
-  }
-#endif
   outName="";
   vgmOutName="";
+  zsmOutName="";
   cmdOutName="";
+
+  // load config for locale
+  e.prePreInit();
+
+#ifdef HAVE_LOCALE
+  String reqLocale=e.getConfString("locale","");
+  if (!reqLocale.empty()) {
+    if (reqLocale.find(".")==String::npos) {
+      reqLocale+=".UTF-8";
+    }
+  }
+  strncpy(reqLocaleCopy,reqLocale.c_str(),63);
+  if (reqLocale!="en_US.UTF-8") {
+    const char* localeRet=NULL;
+#ifdef HAVE_SETLOCALE
+    if ((localeRet=setlocale(LC_CTYPE,reqLocaleCopy))==NULL) {
+      logE("could not set locale (CTYPE)!");
+      displayLocaleFailError=true;
+    } else {
+      logV("locale: %s",localeRet);
+    }
+    if ((localeRet=setlocale(LC_MESSAGES,reqLocaleCopy))==NULL) {
+      logE("could not set locale (MESSAGES)!");
+      displayLocaleFailError=true;
+#ifdef HAVE_MOMO
+      if (momo_setlocale(LC_MESSAGES,reqLocaleCopy)==NULL) {
+        logV("Momo: could not set locale!");
+      }
+#endif
+    } else {
+      logV("locale: %s",localeRet);
+#ifdef HAVE_MOMO
+      if (momo_setlocale(LC_MESSAGES,localeRet)==NULL) {
+        logV("Momo: could not set locale!");
+      }
+#endif
+    }
+#else
+    if ((localeRet=momo_setlocale(LC_MESSAGES,reqLocaleCopy))==NULL) {
+      logV("Momo: could not set locale!");
+    } else {
+      logV("locale: %s",localeRet);
+    }
+#endif
+
+    char exePath[4096];
+    memset(exePath,0,4096);
+#ifndef ANDROID
+    if (!getExePath(argv[0],exePath,4095)) memset(exePath,0,4096);
+#endif
+
+    memset(localeDir,0,4096);
+
+    bool textDomainBound=false;
+    for (int i=0; localeDirs[i]; i++) {
+#ifdef ANDROID
+      strncpy(localeDir,localeDirs[i],4095);
+#else
+      if (exePath[0]!=0 && localeDirs[i][0]!=DIR_SEPARATOR) {
+        // do you NOT understand what memset IS
+        char* i_s=exePath;
+        for (int i_i=0; i_i<4095; i_i++) {
+          localeDir[i_i]=*i_s;
+          if ((*i_s)==0) break;
+          i_s++;
+        }
+        strncat(localeDir,DIR_SEPARATOR_STR,4095);
+        strncat(localeDir,localeDirs[i],4095);
+      } else {
+        strncpy(localeDir,localeDirs[i],4095);
+      }
+#endif
+      logV("bind text domain: %s",localeDir);
+#ifndef ANDROID
+      if (!dirExists(localeDir)) continue;
+#endif
+      if ((localeRet=TA_BINDTEXTDOMAIN("furnace",localeDir))==NULL) {
+        continue;
+      } else {
+        textDomainBound=true;
+        logV("text domain 1: %s",localeRet);
+        break;
+      }
+    }
+    if (!textDomainBound) {
+      logE("could not bind text domain!");
+    } else {
+      if ((localeRet=TA_TEXTDOMAIN("furnace"))==NULL) {
+        logE("could not text domain!");
+      } else {
+        logV("text domain 2: %s",localeRet);
+      }
+    }
+#endif
+  }
 
   initParams();
 
@@ -346,7 +664,7 @@ int main(int argc, char** argv) {
             val=argv[i+1];
             i++;
           } else {
-            reportError(fmt::sprintf("incomplete param %s.",arg.c_str()));
+            reportError(fmt::sprintf(_("incomplete param %s."),arg.c_str()));
             return 1;
           }
         }
@@ -374,7 +692,7 @@ int main(int argc, char** argv) {
     }
   }
 
-  e.setConsoleMode(consoleMode);
+  e.setConsoleMode(consoleMode,!consoleNoStatus);
 
 #ifdef _WIN32
   if (consoleMode) {
@@ -395,62 +713,116 @@ int main(int argc, char** argv) {
     logI("usage: %s file",argv[0]);
     return 1;
   }
-  logI("Furnace version " DIV_VERSION ".");
-  if (!fileName.empty()) {
+
+  if (fileName.empty() && (benchMode || infoMode || outName!="" || vgmOutName!="" || cmdOutName!="")) {
+    logE("provide a file!");
+    return 1;
+  }
+
+#ifdef HAVE_GUI
+  if (e.preInit(consoleMode || benchMode || infoMode || outName!="" || vgmOutName!="" || cmdOutName!="")) {
+    if (consoleMode || benchMode || infoMode || outName!="" || vgmOutName!="" || cmdOutName!="") {
+      logW("engine wants safe mode, but Furnace GUI is not going to start.");
+    } else {
+      safeMode=true;
+    }
+  }
+#else
+  if (e.preInit(true)) {
+    logW("engine wants safe mode, but Furnace GUI is not available.");
+  }
+#endif
+
+  if (safeMode && (consoleMode || benchMode || infoMode || outName!="" || vgmOutName!="" || cmdOutName!="")) {
+    logE("you can't use safe mode and console/export mode together.");
+    return 1;
+  }
+
+  if (safeMode && !safeModeWithAudio) {
+    e.setAudio(DIV_AUDIO_DUMMY);
+  }
+
+  if (!fileName.empty() && ((!e.getConfBool("tutIntroPlayed",TUT_INTRO_PLAYED)) || e.getConfInt("alwaysPlayIntro",0)!=3 || consoleMode || benchMode || infoMode || outName!="" || vgmOutName!="" || cmdOutName!="")) {
     logI("loading module...");
     FILE* f=ps_fopen(fileName.c_str(),"rb");
     if (f==NULL) {
-      reportError(fmt::sprintf("couldn't open file! (%s)",strerror(errno)));
+      reportError(fmt::sprintf(_("couldn't open file! (%s)"),strerror(errno)));
+      e.everythingOK();
+      finishLogFile();
       return 1;
     }
     if (fseek(f,0,SEEK_END)<0) {
-      reportError(fmt::sprintf("couldn't open file! (couldn't get file size: %s)",strerror(errno)));
+      reportError(fmt::sprintf(_("couldn't open file! (couldn't get file size: %s)"),strerror(errno)));
+      e.everythingOK();
       fclose(f);
+      finishLogFile();
       return 1;
     }
     ssize_t len=ftell(f);
     if (len==(SIZE_MAX>>1)) {
-      reportError(fmt::sprintf("couldn't open file! (couldn't get file length: %s)",strerror(errno)));
+      reportError(fmt::sprintf(_("couldn't open file! (couldn't get file length: %s)"),strerror(errno)));
+      e.everythingOK();
       fclose(f);
+      finishLogFile();
       return 1;
     }
     if (len<1) {
       if (len==0) {
-        reportError("that file is empty!");
+        reportError(_("that file is empty!"));
       } else {
-        reportError(fmt::sprintf("couldn't open file! (tell error: %s)",strerror(errno)));
+        reportError(fmt::sprintf(_("couldn't open file! (tell error: %s)"),strerror(errno)));
       }
+      e.everythingOK();
       fclose(f);
+      finishLogFile();
       return 1;
     }
     unsigned char* file=new unsigned char[len];
     if (fseek(f,0,SEEK_SET)<0) {
-      reportError(fmt::sprintf("couldn't open file! (size error: %s)",strerror(errno)));
+      reportError(fmt::sprintf(_("couldn't open file! (size error: %s)"),strerror(errno)));
+      e.everythingOK();
       fclose(f);
       delete[] file;
+      finishLogFile();
       return 1;
     }
     if (fread(file,1,(size_t)len,f)!=(size_t)len) {
-      reportError(fmt::sprintf("couldn't open file! (read error: %s)",strerror(errno)));
+      reportError(fmt::sprintf(_("couldn't open file! (read error: %s)"),strerror(errno)));
+      e.everythingOK();
       fclose(f);
       delete[] file;
+      finishLogFile();
       return 1;
     }
     fclose(f);
-    if (!e.load(file,(size_t)len)) {
-      reportError(fmt::sprintf("could not open file! (%s)",e.getLastError()));
+    if (!e.load(file,(size_t)len,fileName.c_str())) {
+      reportError(fmt::sprintf(_("could not open file! (%s)"),e.getLastError()));
+      e.everythingOK();
+      finishLogFile();
       return 1;
     }
   }
+  if (infoMode) {
+    e.dumpSongInfo();
+    finishLogFile();
+    return 0;
+  }
+
   if (!e.init()) {
     if (consoleMode) {
-      reportError("could not initialize engine!");
+      reportError(_("could not initialize engine!"));
+      finishLogFile();
       return 1;
     } else {
       logE("could not initialize engine!");
       displayEngineFailError=true;
     }
   }
+
+  if (subsong!=-1) {
+    e.changeSongP(subsong);
+  }
+
   if (benchMode) {
     logI("starting benchmark!");
     if (benchMode==2) {
@@ -458,63 +830,73 @@ int main(int argc, char** argv) {
     } else {
       e.benchmarkPlayback();
     }
+    finishLogFile();
     return 0;
   }
+
   if (outName!="" || vgmOutName!="" || cmdOutName!="") {
     if (cmdOutName!="") {
-      SafeWriter* w=e.saveCommand(cmdOutBinary);
+      SafeWriter* w=e.saveCommand();
       if (w!=NULL) {
         FILE* f=fopen(cmdOutName.c_str(),"wb");
         if (f!=NULL) {
           fwrite(w->getFinalBuf(),1,w->size(),f);
           fclose(f);
         } else {
-          reportError(fmt::sprintf("could not open file! (%s)",e.getLastError()));
+          reportError(fmt::sprintf(_("could not open file! (%s)"),e.getLastError()));
         }
         w->finish();
         delete w;
       } else {
-        reportError("could not write command stream!");
+        reportError(_("could not write command stream!"));
       }
     }
     if (vgmOutName!="") {
-      SafeWriter* w=e.saveVGM();
+      SafeWriter* w=e.saveVGM(NULL,true,0x171,false,vgmOutDirect);
       if (w!=NULL) {
         FILE* f=fopen(vgmOutName.c_str(),"wb");
         if (f!=NULL) {
           fwrite(w->getFinalBuf(),1,w->size(),f);
           fclose(f);
         } else {
-          reportError(fmt::sprintf("could not open file! (%s)",e.getLastError()));
+          reportError(fmt::sprintf(_("could not open file! (%s)"),e.getLastError()));
         }
         w->finish();
         delete w;
       } else {
-        reportError("could not write VGM!");
+        reportError(_("could not write VGM!"));
       }
     }
     if (outName!="") {
       e.setConsoleMode(true);
-      e.saveAudio(outName.c_str(),loops,outMode);
+      e.saveAudio(outName.c_str(),exportOptions);
       e.waitAudioFile();
     }
+    finishLogFile();
     return 0;
   }
 
   if (consoleMode) {
     bool cliSuccess=false;
+    if (consoleNoStatus) {
+      cli.noStatus();
+    }
+    if (consoleNoControls) {
+      cli.noControls();
+    }
     cli.bindEngine(&e);
     if (!cli.init()) {
-      reportError("error while starting CLI!");
+      reportError(_("error while starting CLI!"));
     } else {
       cliSuccess=true;
     }
-    logI("playing...");
+    logI(_("playing..."));
     e.play();
     if (cliSuccess) {
       cli.loop();
       cli.finish();
       e.quit();
+      finishLogFile();
       return 0;
     } else {
 #ifdef HAVE_SDL2
@@ -524,6 +906,7 @@ int main(int argc, char** argv) {
         if (ev.type==SDL_QUIT) break;
       }
       e.quit();
+      finishLogFile();
       return 0;
 #else
       while (true) {
@@ -538,39 +921,58 @@ int main(int argc, char** argv) {
   }
 
 #ifdef HAVE_GUI
+  if (safeMode) g.enableSafeMode();
   g.bindEngine(&e);
   if (!g.init()) {
-    reportError("error while starting GUI!");
+    reportError(g.getLastError());
+    finishLogFile();
+    e.everythingOK();
     return 1;
   }
 
   if (displayEngineFailError) {
-    logE("displaying engine fail error.");
-    g.showError("error while initializing audio!");
+    logE(_("displaying engine fail error."));
+    g.showError(_("error while initializing audio!"));
+  }
+
+  if (displayLocaleFailError) {
+#ifndef HAVE_MOMO
+#ifdef __unix__
+    g.showError("could not load language!\napparently your system does not support this language correctly.\nmake sure you've generated language data by editing /etc/locale.gen\nand then running locale-gen as root.");
+#else
+    g.showError("could not load language!\nthis is a bug!");
+#endif
+#endif
   }
 
   if (!fileName.empty()) {
     g.setFileName(fileName);
   }
 
+#ifndef _WIN32
+  sigemptyset(&termsa.sa_mask);
+  termsa.sa_flags=0;
+  termsa.sa_handler=handleTermGUI;
+  sigaction(SIGTERM,&termsa,NULL);
+#endif
+
   g.loop();
   logI("closing GUI.");
-  g.finish();
+  g.finish(true);
 #else
   logE("GUI requested but GUI not compiled!");
 #endif
 
   logI("stopping engine.");
-  e.quit();
+  e.quit(false);
+
+  finishLogFile();
 
 #ifdef _WIN32
   if (coResult==S_OK || coResult==S_FALSE) {
     CoUninitialize();
   }
 #endif
+  e.everythingOK();
   return 0;
 }
-
-#ifdef _WIN32
-#include "winMain.cpp"
-#endif

@@ -1,6 +1,6 @@
 /**
  * Furnace Tracker - multi-system chiptune tracker
- * Copyright (C) 2021-2022 tildearrow and contributors
+ * Copyright (C) 2021-2024 tildearrow and contributors
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -19,11 +19,16 @@
 
 #ifndef _OPL_H
 #define _OPL_H
+
 #include "../dispatch.h"
-#include "../macroInt.h"
-#include <queue>
+#include "../../fixedQueue.h"
 #include "../../../extern/opl/opl3.h"
+extern "C" {
+#include "../../../extern/YM3812-LLE/fmopl2.h"
+#include "../../../extern/YMF262-LLE/fmopl3.h"
+}
 #include "sound/ymfm/ymfm_adpcm.h"
+#include "sound/ymfm/ymfm_opl.h"
 
 class DivOPLAInterface: public ymfm::ymfm_interface {
   public:
@@ -36,41 +41,24 @@ class DivOPLAInterface: public ymfm::ymfm_interface {
 
 class DivPlatformOPL: public DivDispatch {
   protected:
-    struct Channel {
+    struct Channel: public SharedChannel<int> {
       DivInstrumentFM state;
-      DivMacroInt std;
       unsigned char freqH, freqL;
-      int freq, baseFreq, pitch, pitch2, note, ins, sample, fixedFreq;
-      bool active, insChanged, freqChanged, keyOn, keyOff, portaPause, furnacePCM, inPorta, fourOp, hardReset;
-      int vol, outVol;
+      int sample, fixedFreq;
+      bool furnacePCM, fourOp, hardReset;
       unsigned char pan;
-      void macroInit(DivInstrument* which) {
-        std.init(which);
-        pitch2=0;
-      }
+      int macroVolMul;
       Channel():
+        SharedChannel<int>(0),
         freqH(0),
         freqL(0),
-        freq(0),
-        baseFreq(0),
-        pitch(0),
-        pitch2(0),
-        note(0),
-        ins(-1),
         sample(-1),
         fixedFreq(0),
-        active(false),
-        insChanged(true),
-        freqChanged(false),
-        keyOn(false),
-        keyOff(false),
-        portaPause(false),
         furnacePCM(false),
-        inPorta(false),
         fourOp(false),
         hardReset(false),
-        vol(0),
-        pan(3) {
+        pan(3),
+        macroVolMul(64) {
         state.ops=2;
       }
     };
@@ -81,13 +69,26 @@ class DivPlatformOPL: public DivDispatch {
       unsigned short addr;
       unsigned char val;
       bool addrOrVal;
+      QueuedWrite(): addr(0), val(0), addrOrVal(false) {}
       QueuedWrite(unsigned short a, unsigned char v): addr(a), val(v), addrOrVal(false) {}
     };
-    std::queue<QueuedWrite> writes;
-    opl3_chip fm;
+    FixedQueue<QueuedWrite,2048> writes;
+
+    unsigned int dacVal;
+    unsigned int dacVal2;
+    int dacOut;
+    int dacOut3[4];
+    bool lastSH;
+    bool lastSH2;
+    bool lastSY;
+    bool waitingBusy;
+    int downsamplerStep;
+    
     unsigned char* adpcmBMem;
     size_t adpcmBMemLen;
     DivOPLAInterface iface;
+    unsigned int sampleOffB[256];
+    bool sampleLoaded[256];
   
     ymfm::adpcm_b_engine* adpcmB;
     const unsigned char** slotsNonDrums;
@@ -96,7 +97,7 @@ class DivPlatformOPL: public DivDispatch {
     const unsigned short* chanMap;
     const unsigned char* outChanMap;
     int chipFreqBase, chipRateBase;
-    int delay, chipType, oplType, chans, melodicChans, totalChans, adpcmChan, sampleBank;
+    int delay, chipType, oplType, chans, melodicChans, totalChans, adpcmChan, sampleBank, totalOutputs;
     unsigned char lastBusy;
     unsigned char drumState;
     unsigned char drumVol[5];
@@ -107,39 +108,67 @@ class DivPlatformOPL: public DivDispatch {
 
     unsigned char lfoValue;
 
-    bool useYMFM, update4OpMask, pretendYMU, downsample;
+    // 0: Nuked-OPL3
+    // 1: ymfm
+    // 2: YM3812-LLE/YMF262-LLE
+    unsigned char emuCore;
+
+    bool update4OpMask, pretendYMU, downsample, compatPan;
   
     short oldWrites[512];
     short pendingWrites[512];
 
+    // chips
+    opl3_chip fm;
+    ymfm::ym3526* fm_ymfm1;
+    ymfm::ym3812* fm_ymfm2;
+    ymfm::y8950* fm_ymfm8950;
+    ymfm::ymf262* fm_ymfm3;
+    fmopl2_t fm_lle2;
+    fmopl3_t fm_lle3;
+
+    DivMemoryComposition memCompo;
+
     int octave(int freq);
     int toFreq(int freq);
     double NOTE_ADPCMB(int note);
+    void commitState(int ch, DivInstrument* ins);
 
+    friend void putDispatchChip(void*,int);
     friend void putDispatchChan(void*,int,int);
 
-    void acquire_nuked(short* bufL, short* bufR, size_t start, size_t len);
-    //void acquire_ymfm(short* bufL, short* bufR, size_t start, size_t len);
+    void acquire_nukedLLE2(short** buf, size_t len);
+    void acquire_nukedLLE3(short** buf, size_t len);
+    void acquire_nuked(short** buf, size_t len);
+    void acquire_ymfm3(short** buf, size_t len);
+    void acquire_ymfm8950(short** buf, size_t len);
+    void acquire_ymfm2(short** buf, size_t len);
+    void acquire_ymfm1(short** buf, size_t len);
   
   public:
-    void acquire(short* bufL, short* bufR, size_t start, size_t len);
+    void acquire(short** buf, size_t len);
     int dispatch(DivCommand c);
     void* getChanState(int chan);
     DivMacroInt* getChanMacroInt(int ch);
+    unsigned short getPan(int chan);
+    DivChannelPair getPaired(int chan);
     DivDispatchOscBuffer* getOscBuffer(int chan);
+    int mapVelocity(int ch, float vel);
+    float getGain(int ch, int vol);
     unsigned char* getRegisterPool();
     int getRegisterPoolSize();
     void reset();
     void forceIns();
     void tick(bool sysTick=true);
     void muteChannel(int ch, bool mute);
-    bool isStereo();
-    void setYMFM(bool use);
+    int getOutputCount();
+    void setCore(unsigned char which);
     void setOPLType(int type, bool drums);
     bool keyOffAffectsArp(int ch);
     bool keyOffAffectsPorta(int ch);
+    bool getLegacyAlwaysSetVolume();
     void toggleRegisterDump(bool enable);
-    void setFlags(unsigned int flags);
+    void setFlags(const DivConfig& flags);
     void notifyInsChange(int ins);
     void notifyInsDeletion(void* ins);
     int getPortaFloor(int ch);
@@ -148,8 +177,10 @@ class DivPlatformOPL: public DivDispatch {
     const void* getSampleMem(int index);
     size_t getSampleMemCapacity(int index);
     size_t getSampleMemUsage(int index);
-    void renderSamples();
-    int init(DivEngine* parent, int channels, int sugRate, unsigned int flags);
+    bool isSampleLoaded(int index, int sample);
+    const DivMemoryComposition* getMemCompo(int index);
+    void renderSamples(int chipID);
+    int init(DivEngine* parent, int channels, int sugRate, const DivConfig& flags);
     void quit();
     ~DivPlatformOPL();
 };

@@ -1,6 +1,6 @@
 /**
  * Furnace Tracker - multi-system chiptune tracker
- * Copyright (C) 2021-2022 tildearrow and contributors
+ * Copyright (C) 2021-2024 tildearrow and contributors
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -21,48 +21,29 @@
 #define _GB_H
 
 #include "../dispatch.h"
-#include "../macroInt.h"
 #include "../waveSynth.h"
 #include "sound/gb/gb.h"
-#include <queue>
+#include "../../fixedQueue.h"
 
 class DivPlatformGB: public DivDispatch {
-  struct Channel {
-    int freq, baseFreq, pitch, pitch2, note, ins;
+  struct Channel: public SharedChannel<signed char> {
     unsigned char duty, sweep;
-    bool active, insChanged, freqChanged, sweepChanged, keyOn, keyOff, inPorta, released, softEnv, killIt;
+    bool sweepChanged, released, softEnv, killIt;
     bool soManyHacksToMakeItDefleCompatible;
-    signed char vol, outVol, wave, lastKill;
+    signed short wave;
+    signed char lastKill;
     unsigned char envVol, envDir, envLen, soundLen;
     unsigned short hwSeqPos;
     short hwSeqDelay;
-    DivMacroInt std;
-    void macroInit(DivInstrument* which) {
-      std.init(which);
-      pitch2=0;
-    }
     Channel():
-      freq(0),
-      baseFreq(0),
-      pitch(0),
-      pitch2(0),
-      note(0),
-      ins(-1),
+      SharedChannel<signed char>(15),
       duty(0),
       sweep(0),
-      active(false),
-      insChanged(true),
-      freqChanged(false),
       sweepChanged(false),
-      keyOn(false),
-      keyOff(false),
-      inPorta(false),
       released(false),
       softEnv(false),
       killIt(false),
       soManyHacksToMakeItDefleCompatible(false),
-      vol(15),
-      outVol(15),
       wave(-1),
       lastKill(0),
       envVol(0),
@@ -76,29 +57,37 @@ class DivPlatformGB: public DivDispatch {
   DivDispatchOscBuffer* oscBuf[4];
   bool isMuted[4];
   bool antiClickEnabled;
+  bool invertWave;
+  bool enoughAlready;
+  bool doubleWave;
+  bool lastDoubleWave;
   unsigned char lastPan;
   DivWaveSynth ws;
   struct QueuedWrite {
-      unsigned char addr;
-      unsigned char val;
-      QueuedWrite(unsigned char a, unsigned char v): addr(a), val(v) {}
+    unsigned char addr;
+    unsigned char val;
+    QueuedWrite(): addr(0), val(0) {}
+    QueuedWrite(unsigned char a, unsigned char v): addr(a), val(v) {}
   };
-  std::queue<QueuedWrite> writes;
+  FixedQueue<QueuedWrite,256> writes;
 
   int antiClickPeriodCount, antiClickWavePos;
 
+  int coreQuality;
   GB_gameboy_t* gb;
   GB_model_t model;
   unsigned char regPool[128];
   
   unsigned char procMute();
-  void updateWave();
+  void updateWave();  
+  friend void putDispatchChip(void*,int);
   friend void putDispatchChan(void*,int,int);
   public:
-    void acquire(short* bufL, short* bufR, size_t start, size_t len);
+    void acquire(short** buf, size_t len);
     int dispatch(DivCommand c);
     void* getChanState(int chan);
     DivMacroInt* getChanMacroInt(int ch);
+    unsigned short getPan(int chan);
     DivDispatchOscBuffer* getOscBuffer(int chan);
     unsigned char* getRegisterPool();
     int getRegisterPoolSize();
@@ -107,7 +96,7 @@ class DivPlatformGB: public DivDispatch {
     void tick(bool sysTick=true);
     void muteChannel(int ch, bool mute);
     int getPortaFloor(int ch);
-    bool isStereo();
+    int getOutputCount();
     bool getDCOffRequired();
     void notifyInsChange(int ins);
     void notifyWaveChange(int wave);
@@ -115,8 +104,9 @@ class DivPlatformGB: public DivDispatch {
     void poke(unsigned int addr, unsigned short val);
     void poke(std::vector<DivRegWrite>& wlist);
     const char** getRegisterSheet();
-    void setFlags(unsigned int flags);
-    int init(DivEngine* parent, int channels, int sugRate, unsigned int flags);
+    void setFlags(const DivConfig& flags);
+    void setCoreQuality(unsigned char q);
+    int init(DivEngine* parent, int channels, int sugRate, const DivConfig& flags);
     void quit();
     ~DivPlatformGB();
 };

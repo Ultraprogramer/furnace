@@ -1,6 +1,6 @@
 /**
  * Furnace Tracker - multi-system chiptune tracker
- * Copyright (C) 2021-2022 tildearrow and contributors
+ * Copyright (C) 2021-2024 tildearrow and contributors
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -20,9 +20,11 @@
 #ifndef _AY_H
 #define _AY_H
 #include "../dispatch.h"
-#include "../macroInt.h"
-#include <queue>
+#include "../../fixedQueue.h"
 #include "sound/ay8910.h"
+extern "C" {
+#include "sound/atomicssg/ssg.h"
+}
 
 class DivPlatformAY8910: public DivDispatch {
   protected:
@@ -30,21 +32,58 @@ class DivPlatformAY8910: public DivDispatch {
       0,4,1,5,2,6,9,8,11,12,13,3,7,10,14,15
     };
     inline unsigned char regRemap(unsigned char reg) { return intellivision?AY8914RegRemap[reg&0x0f]:reg&0x0f; }
-    struct Channel {
-      unsigned char freqH, freqL;
-      int freq, baseFreq, note, pitch, pitch2;
-      int ins;
-      unsigned char psgMode, autoEnvNum, autoEnvDen;
+    struct Channel: public SharedChannel<int> {
+      struct PSGMode {
+        // bit 3: DAC
+        // bit 2: envelope
+        // bit 1: noise
+        // bit 0: tone
+        unsigned char val;
+
+        unsigned char getTone() {
+          return (val&8)?0:(val&1);
+        }
+
+        unsigned char getNoise() {
+          return (val&8)?0:(val&2);
+        }
+
+        unsigned char getEnvelope() {
+          return (val&8)?0:(val&4);
+        }
+
+        PSGMode(unsigned char v=1):
+          val(v) {}
+      };
+      PSGMode curPSGMode;
+      PSGMode nextPSGMode;
+
+      struct DAC {
+        int sample, rate, period, pos, out;
+        bool furnaceDAC, setPos;
+
+        DAC():
+          sample(-1),
+          rate(0),
+          period(0),
+          pos(0),
+          out(0),
+          furnaceDAC(false),
+          setPos(false) {}
+      } dac;
+
+      unsigned char autoEnvNum, autoEnvDen;
       signed char konCycles;
-      bool active, insChanged, freqChanged, keyOn, keyOff, portaPause, inPorta;
-      int vol, outVol;
-      unsigned char pan;
-      DivMacroInt std;
-      void macroInit(DivInstrument* which) {
-        std.init(which);
-        pitch2=0;
-      }
-      Channel(): freqH(0), freqL(0), freq(0), baseFreq(0), note(0), pitch(0), pitch2(0), ins(-1), psgMode(1), autoEnvNum(0), autoEnvDen(0), active(false), insChanged(true), freqChanged(false), keyOn(false), keyOff(false), portaPause(false), inPorta(false), vol(0), outVol(15), pan(3) {}
+      unsigned short fixedFreq;
+      Channel():
+        SharedChannel<int>(15),
+        curPSGMode(PSGMode(0)),
+        nextPSGMode(PSGMode(1)),
+        dac(DAC()),
+        autoEnvNum(0),
+        autoEnvDen(0),
+        konCycles(0),
+        fixedFreq(0) {}
     };
     Channel chan[3];
     bool isMuted[3];
@@ -52,28 +91,30 @@ class DivPlatformAY8910: public DivDispatch {
       unsigned short addr;
       unsigned char val;
       bool addrOrVal;
+      QueuedWrite(): addr(0), val(0), addrOrVal(false) {}
       QueuedWrite(unsigned short a, unsigned char v): addr(a), val(v), addrOrVal(false) {}
     };
-    std::queue<QueuedWrite> writes;
+    FixedQueue<QueuedWrite,128> writes;
     ay8910_device* ay;
     DivDispatchOscBuffer* oscBuf[3];
     unsigned char regPool[16];
     unsigned char lastBusy;
   
-    bool dacMode;
-    int dacPeriod;
-    int dacRate;
-    int dacPos;
-    int dacSample;
     unsigned char sampleBank;
+    unsigned char stereoSep;
+    unsigned char selCore;
+
+    ssg_t ay_atomic;
 
     int delay;
 
     bool extMode;
     unsigned int extClock;
+    int dacRate;
     unsigned char extDiv;
+    unsigned char dacRateDiv;
 
-    bool stereo, sunsoft, intellivision, clockSel;
+    bool stereo, sunsoft, intellivision, clockSel, yamaha;
     bool ioPortA, ioPortB;
     unsigned char portAVal, portBVal;
   
@@ -86,38 +127,50 @@ class DivPlatformAY8910: public DivDispatch {
     short* ayBuf[3];
     size_t ayBufLen;
 
+    void checkWrites();
     void updateOutSel(bool immediate=false);
 
+    void acquire_mame(short** buf, size_t len);
+    void acquire_atomic(short** buf, size_t len);
+  
+    friend void putDispatchChip(void*,int);
     friend void putDispatchChan(void*,int,int);
   
   public:
+    void runDAC();
     void setExtClockDiv(unsigned int eclk=COLOR_NTSC, unsigned char ediv=8);
-    void acquire(short* bufL, short* bufR, size_t start, size_t len);
+    void acquire(short** buf, size_t len);
     int dispatch(DivCommand c);
     void* getChanState(int chan);
     DivDispatchOscBuffer* getOscBuffer(int chan);
+    int mapVelocity(int ch, float vel);
+    float getGain(int ch, int vol);
     unsigned char* getRegisterPool();
     int getRegisterPoolSize();
+    void setCore(unsigned char core);
     void flushWrites();
     void reset();
     void forceIns();
     void tick(bool sysTick=true);
     void muteChannel(int ch, bool mute);
-    void setFlags(unsigned int flags);
-    bool isStereo();
+    void setFlags(const DivConfig& flags);
+    int getOutputCount();
     bool keyOffAffectsArp(int ch);
     DivMacroInt* getChanMacroInt(int ch);
+    DivSamplePos getSamplePos(int ch);
+    bool getLegacyAlwaysSetVolume();
     bool getDCOffRequired();
     void notifyInsDeletion(void* ins);
     void poke(unsigned int addr, unsigned short val);
     void poke(std::vector<DivRegWrite>& wlist);
     const char** getRegisterSheet();
-    int init(DivEngine* parent, int channels, int sugRate, unsigned int flags);
+    int init(DivEngine* parent, int channels, int sugRate, const DivConfig& flags);
     void quit();
-    DivPlatformAY8910(bool useExtMode=false, unsigned int eclk=COLOR_NTSC, unsigned char ediv=8):
+    DivPlatformAY8910(bool useExtMode=false, unsigned int eclk=COLOR_NTSC, unsigned char ediv=8, unsigned char ddiv=24):
       DivDispatch(),
       extMode(useExtMode),
       extClock(eclk),
-      extDiv(ediv) {}
+      extDiv(ediv),
+      dacRateDiv(ddiv) {}
 };
 #endif

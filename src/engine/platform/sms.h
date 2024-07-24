@@ -1,6 +1,6 @@
 /**
  * Furnace Tracker - multi-system chiptune tracker
- * Copyright (C) 2021-2022 tildearrow and contributors
+ * Copyright (C) 2021-2024 tildearrow and contributors
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -21,39 +21,20 @@
 #define _SMS_H
 
 #include "../dispatch.h"
-#include "../macroInt.h"
 #include "sound/sn76496.h"
 extern "C" {
   #include "../../../extern/Nuked-PSG/ympsg.h"
 }
-#include <queue>
+#include "../../fixedQueue.h"
 
 class DivPlatformSMS: public DivDispatch {
-  struct Channel {
-    int freq, baseFreq, pitch, pitch2, note, actualNote, ins;
-    bool active, insChanged, freqChanged, keyOn, keyOff, inPorta;
-    signed char vol, outVol;
-    DivMacroInt std;
-    void macroInit(DivInstrument* which) {
-      std.init(which);
-      pitch2=0;
-    }
+  struct Channel: public SharedChannel<signed char> {
+    int actualNote;
+    bool writeVol;
     Channel():
-      freq(0),
-      baseFreq(0),
-      pitch(0),
-      pitch2(0),
-      note(0),
+      SharedChannel<signed char>(15),
       actualNote(0),
-      ins(-1),
-      active(false),
-      insChanged(true),
-      freqChanged(false),
-      keyOn(false),
-      keyOff(false),
-      inPorta(false),
-      vol(15),
-      outVol(15) {}
+      writeVol(false) {}
   };
   Channel chan[4];
   DivDispatchOscBuffer* oscBuf[4];
@@ -61,6 +42,8 @@ class DivPlatformSMS: public DivDispatch {
   unsigned char lastPan;
   unsigned char oldValue; 
   unsigned char snNoiseMode;
+  unsigned char regPool[16];
+  unsigned char chanLatch;
   int divider=16;
   double toneDivider=64.0;
   double noiseDivider=64.0;
@@ -69,40 +52,54 @@ class DivPlatformSMS: public DivDispatch {
   bool isRealSN;
   bool stereo;
   bool nuked;
+  bool easyNoise;
   sn76496_base_device* sn;
   ympsg_t sn_nuked;
   struct QueuedWrite {
     unsigned short addr;
     unsigned char val;
     bool addrOrVal;
+    QueuedWrite(): addr(0), val(0), addrOrVal(false) {}
     QueuedWrite(unsigned short a, unsigned char v): addr(a), val(v), addrOrVal(false) {}
   };
-  std::queue<QueuedWrite> writes;
+  FixedQueue<QueuedWrite,128> writes;
+  friend void putDispatchChip(void*,int);
   friend void putDispatchChan(void*,int,int);
 
-  void acquire_nuked(short* bufL, short* bufR, size_t start, size_t len);
-  void acquire_mame(short* bufL, short* bufR, size_t start, size_t len);
+  double NOTE_SN(int ch, int note);
+  int snCalcFreq(int ch);
+  void poolWrite(unsigned short a, unsigned char v);
+
+  void acquire_nuked(short** buf, size_t len);
+  void acquire_mame(short** buf, size_t len);
   public:
-    void acquire(short* bufL, short* bufR, size_t start, size_t len);
+    void acquire(short** buf, size_t len);
     int dispatch(DivCommand c);
     void* getChanState(int chan);
     DivMacroInt* getChanMacroInt(int ch);
+    unsigned short getPan(int chan);
     DivDispatchOscBuffer* getOscBuffer(int chan);
+    int mapVelocity(int ch, float vel);
+    float getGain(int ch, int vol);
+    unsigned char* getRegisterPool();
+    int getRegisterPoolSize();
     void reset();
     void forceIns();
     void tick(bool sysTick=true);
     void muteChannel(int ch, bool mute);
-    bool isStereo();
+    int getOutputCount();
     bool keyOffAffectsArp(int ch);
     bool keyOffAffectsPorta(int ch);
+    bool getLegacyAlwaysSetVolume();
+    float getPostAmp();
     int getPortaFloor(int ch);
-    void setFlags(unsigned int flags);
+    void setFlags(const DivConfig& flags);
     void notifyInsDeletion(void* ins);
     void poke(unsigned int addr, unsigned short val);
     void poke(std::vector<DivRegWrite>& wlist);
     const char** getRegisterSheet();
     void setNuked(bool value);
-    int init(DivEngine* parent, int channels, int sugRate, unsigned int flags);
+    int init(DivEngine* parent, int channels, int sugRate, const DivConfig& flags);
     void quit();
     ~DivPlatformSMS();
 };

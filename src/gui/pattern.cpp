@@ -1,6 +1,6 @@
 /**
  * Furnace Tracker - multi-system chiptune tracker
- * Copyright (C) 2021-2022 tildearrow and contributors
+ * Copyright (C) 2021-2024 tildearrow and contributors
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -18,16 +18,27 @@
  */
 
 // for suck's fake Clang extension!
-#include <imgui.h>
 #define _USE_MATH_DEFINES
 #include "gui.h"
 #include "../ta-log.h"
 #include "imgui_internal.h"
 #include "IconsFontAwesome4.h"
+#include "furIcons.h"
 #include "misc/cpp/imgui_stdlib.h"
 #include "guiConst.h"
 #include "../utfutils.h"
 #include <fmt/printf.h>
+
+struct DelayedLabel {
+  float posCenter, posY;
+  ImVec2 textSize;
+  const char* label;
+  DelayedLabel(float pc, float py, ImVec2 ts, const char* l):
+    posCenter(pc),
+    posY(py),
+    textSize(ts),
+    label(l) {}
+};
 
 inline float randRange(float min, float max) {
   return min+((float)rand()/(float)RAND_MAX)*(max-min);
@@ -50,11 +61,11 @@ void _popPartBlend(const ImDrawList* drawList, const ImDrawCmd* cmd) {
 }
 
 void FurnaceGUI::pushPartBlend() {
-  SDL_SetRenderDrawBlendMode(sdlRend,SDL_BLENDMODE_ADD);
+  rend->setBlendMode(GUI_BLEND_MODE_ADD);
 }
 
 void FurnaceGUI::popPartBlend() {
-  SDL_SetRenderDrawBlendMode(sdlRend,SDL_BLENDMODE_BLEND);
+  rend->setBlendMode(GUI_BLEND_MODE_BLEND);
 }
 
 // draw a pattern row
@@ -91,8 +102,12 @@ inline void FurnaceGUI::patternRow(int i, bool isPlaying, float lineHeight, int 
   // check overflow highlight
   if (settings.overflowHighlight) {
     if (edit && cursor.y==i && curWindowLast==GUI_WINDOW_PATTERN) {
-      ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0,ImGui::GetColorU32(uiColors[GUI_COLOR_EDITING]));
-    } else if (isPlaying && oldRow==i && ord==e->getOrder()) {
+      if (editClone && !isPatUnique && secondTimer<0.5) {
+        ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0,ImGui::GetColorU32(uiColors[GUI_COLOR_EDITING_CLONE]));
+      } else {
+        ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0,ImGui::GetColorU32(uiColors[GUI_COLOR_EDITING]));
+      }
+    } else if (isPlaying && oldRow==i && ord==playOrder) {
       ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0,ImGui::GetColorU32(uiColors[GUI_COLOR_PATTERN_PLAY_HEAD]));
     } else if (e->curSubSong->hilightB>0 && !(i%e->curSubSong->hilightB)) {
       ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0,ImGui::GetColorU32(uiColors[GUI_COLOR_PATTERN_HI_2]));
@@ -102,8 +117,12 @@ inline void FurnaceGUI::patternRow(int i, bool isPlaying, float lineHeight, int 
   } else {
     isPushing=true;
     if (edit && cursor.y==i && curWindowLast==GUI_WINDOW_PATTERN) {
-      ImGui::PushStyleColor(ImGuiCol_Header,ImGui::GetColorU32(uiColors[GUI_COLOR_EDITING]));
-    } else if (isPlaying && oldRow==i && ord==e->getOrder()) {
+      if (editClone && !isPatUnique && secondTimer<0.5) {
+        ImGui::PushStyleColor(ImGuiCol_Header,ImGui::GetColorU32(uiColors[GUI_COLOR_EDITING_CLONE]));
+      } else {
+        ImGui::PushStyleColor(ImGuiCol_Header,ImGui::GetColorU32(uiColors[GUI_COLOR_EDITING]));
+      }
+    } else if (isPlaying && oldRow==i && ord==playOrder) {
       ImGui::PushStyleColor(ImGuiCol_Header,ImGui::GetColorU32(uiColors[GUI_COLOR_PATTERN_PLAY_HEAD]));
     } else if (e->curSubSong->hilightB>0 && !(i%e->curSubSong->hilightB)) {
       ImGui::PushStyleColor(ImGuiCol_Header,ImGui::GetColorU32(uiColors[GUI_COLOR_PATTERN_HI_2]));
@@ -128,19 +147,26 @@ inline void FurnaceGUI::patternRow(int i, bool isPlaying, float lineHeight, int 
   if (ImGui::IsItemClicked()) {
     startSelection(0,0,i,true);
   }
+  if (ImGui::IsItemActive() && CHECK_LONG_HOLD) {
+    ImGui::InhibitInertialScroll();
+    NOTIFY_LONG_HOLD;
+  }
   ImGui::PopStyleColor();
   // for each column
+  int mustSetXOf=0;
   for (int j=0; j<chans; j++) {
     // check if channel is not hidden
     if (!e->curSubSong->chanShow[j]) {
-      patChanX[j]=ImGui::GetCursorPosX();
       continue;
     }
     int chanVolMax=e->getMaxVolumeChan(j);
     if (chanVolMax<1) chanVolMax=1;
     const DivPattern* pat=patCache[j];
     ImGui::TableNextColumn();
-    patChanX[j]=ImGui::GetCursorPosX();
+    for (int k=mustSetXOf; k<=j; k++)  {
+      patChanX[k]=ImGui::GetCursorScreenPos().x;
+    }
+    mustSetXOf=j+1;
 
     // selection highlight flags
     int sel1XSum=sel1.xCoarse*32+sel1.xFine;
@@ -165,7 +191,6 @@ inline void FurnaceGUI::patternRow(int i, bool isPlaying, float lineHeight, int 
       ImGui::PushStyleColor(ImGuiCol_HeaderActive,uiColors[GUI_COLOR_PATTERN_CURSOR_ACTIVE]);
       ImGui::PushStyleColor(ImGuiCol_HeaderHovered,uiColors[GUI_COLOR_PATTERN_CURSOR_HOVER]);
       ImGui::Selectable(id,true,ImGuiSelectableFlags_NoPadWithHalfSpacing,noteCellSize);
-      demandX=ImGui::GetCursorPosX();
       ImGui::PopStyleColor(3);
     } else {
       if (selectedNote) ImGui::PushStyleColor(ImGuiCol_Header,uiColors[GUI_COLOR_PATTERN_SELECTION]);
@@ -177,6 +202,10 @@ inline void FurnaceGUI::patternRow(int i, bool isPlaying, float lineHeight, int 
     }
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem)) {
       updateSelection(j,0,i);
+    }
+    if (ImGui::IsItemActive() && CHECK_LONG_HOLD) {
+      ImGui::InhibitInertialScroll();
+      NOTIFY_LONG_HOLD;
     }
     ImGui::PopStyleColor();
 
@@ -205,7 +234,6 @@ inline void FurnaceGUI::patternRow(int i, bool isPlaying, float lineHeight, int 
         ImGui::PushStyleColor(ImGuiCol_HeaderActive,uiColors[GUI_COLOR_PATTERN_CURSOR_ACTIVE]);
         ImGui::PushStyleColor(ImGuiCol_HeaderHovered,uiColors[GUI_COLOR_PATTERN_CURSOR_HOVER]);
         ImGui::Selectable(id,true,ImGuiSelectableFlags_NoPadWithHalfSpacing,insCellSize);
-        demandX=ImGui::GetCursorPosX();
         ImGui::PopStyleColor(3);
       } else {
         if (selectedIns) ImGui::PushStyleColor(ImGuiCol_Header,uiColors[GUI_COLOR_PATTERN_SELECTION]);
@@ -217,6 +245,10 @@ inline void FurnaceGUI::patternRow(int i, bool isPlaying, float lineHeight, int 
       }
       if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem)) {
         updateSelection(j,1,i);
+      }
+      if (ImGui::IsItemActive() && CHECK_LONG_HOLD) {
+        ImGui::InhibitInertialScroll();
+        NOTIFY_LONG_HOLD;
       }
       ImGui::PopStyleColor();
     }
@@ -239,7 +271,6 @@ inline void FurnaceGUI::patternRow(int i, bool isPlaying, float lineHeight, int 
         ImGui::PushStyleColor(ImGuiCol_HeaderActive,uiColors[GUI_COLOR_PATTERN_CURSOR_ACTIVE]);
         ImGui::PushStyleColor(ImGuiCol_HeaderHovered,uiColors[GUI_COLOR_PATTERN_CURSOR_HOVER]);
         ImGui::Selectable(id,true,ImGuiSelectableFlags_NoPadWithHalfSpacing,volCellSize);
-        demandX=ImGui::GetCursorPosX();
         ImGui::PopStyleColor(3);
       } else {
         if (selectedVol) ImGui::PushStyleColor(ImGuiCol_Header,uiColors[GUI_COLOR_PATTERN_SELECTION]);
@@ -251,6 +282,10 @@ inline void FurnaceGUI::patternRow(int i, bool isPlaying, float lineHeight, int 
       }
       if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem)) {
         updateSelection(j,2,i);
+      }
+      if (ImGui::IsItemActive() && CHECK_LONG_HOLD) {
+        ImGui::InhibitInertialScroll();
+        NOTIFY_LONG_HOLD;
       }
       ImGui::PopStyleColor();
     }
@@ -272,9 +307,13 @@ inline void FurnaceGUI::patternRow(int i, bool isPlaying, float lineHeight, int 
           if (pat->data[i][index]>0xff) {
             snprintf(id,63,"??##PE%d_%d_%d",k,i,j);
             ImGui::PushStyleColor(ImGuiCol_Text,uiColors[GUI_COLOR_PATTERN_EFFECT_INVALID]);
-          } else {
+          } else if (pat->data[i][index]>=0x10 || settings.oneDigitEffects==0) {
             const unsigned char data=pat->data[i][index];
             snprintf(id,63,"%.2X##PE%d_%d_%d",data,k,i,j);
+            ImGui::PushStyleColor(ImGuiCol_Text,uiColors[fxColors[data]]);
+          } else {
+            const unsigned char data=pat->data[i][index];
+            snprintf(id,63," %.1X##PE%d_%d_%d",data,k,i,j);
             ImGui::PushStyleColor(ImGuiCol_Text,uiColors[fxColors[data]]);
           }
         }
@@ -284,7 +323,6 @@ inline void FurnaceGUI::patternRow(int i, bool isPlaying, float lineHeight, int 
           ImGui::PushStyleColor(ImGuiCol_HeaderActive,uiColors[GUI_COLOR_PATTERN_CURSOR_ACTIVE]);
           ImGui::PushStyleColor(ImGuiCol_HeaderHovered,uiColors[GUI_COLOR_PATTERN_CURSOR_HOVER]);
           ImGui::Selectable(id,true,ImGuiSelectableFlags_NoPadWithHalfSpacing,effectCellSize);
-          demandX=ImGui::GetCursorPosX();
           ImGui::PopStyleColor(3);
         } else {
           if (selectedEffect) ImGui::PushStyleColor(ImGuiCol_Header,uiColors[GUI_COLOR_PATTERN_SELECTION]);
@@ -296,6 +334,10 @@ inline void FurnaceGUI::patternRow(int i, bool isPlaying, float lineHeight, int 
         }
         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem)) {
           updateSelection(j,index-1,i);
+        }
+        if (ImGui::IsItemActive() && CHECK_LONG_HOLD) {
+          ImGui::InhibitInertialScroll();
+          NOTIFY_LONG_HOLD;
         }
 
         // effect value
@@ -310,7 +352,6 @@ inline void FurnaceGUI::patternRow(int i, bool isPlaying, float lineHeight, int 
           ImGui::PushStyleColor(ImGuiCol_HeaderActive,uiColors[GUI_COLOR_PATTERN_CURSOR_ACTIVE]);
           ImGui::PushStyleColor(ImGuiCol_HeaderHovered,uiColors[GUI_COLOR_PATTERN_CURSOR_HOVER]);
           ImGui::Selectable(id,true,ImGuiSelectableFlags_NoPadWithHalfSpacing,effectValCellSize);
-          demandX=ImGui::GetCursorPosX();
           ImGui::PopStyleColor(3);
         } else {
           if (selectedEffectVal) ImGui::PushStyleColor(ImGuiCol_Header,uiColors[GUI_COLOR_PATTERN_SELECTION]);
@@ -323,6 +364,10 @@ inline void FurnaceGUI::patternRow(int i, bool isPlaying, float lineHeight, int 
         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem)) {
           updateSelection(j,index,i);
         }
+        if (ImGui::IsItemActive() && CHECK_LONG_HOLD) {
+          ImGui::InhibitInertialScroll();
+          NOTIFY_LONG_HOLD;
+        }
         ImGui::PopStyleColor();
       }
     }
@@ -331,7 +376,9 @@ inline void FurnaceGUI::patternRow(int i, bool isPlaying, float lineHeight, int 
     ImGui::PopStyleColor();
   }
   ImGui::TableNextColumn();
-  patChanX[chans]=ImGui::GetCursorPosX();
+  for (int k=mustSetXOf; k<=chans; k++)  {
+    patChanX[k]=ImGui::GetCursorScreenPos().x;
+  }
 }
 
 void FurnaceGUI::drawPattern() {
@@ -344,16 +391,17 @@ void FurnaceGUI::drawPattern() {
   if (!patternOpen) return;
 
   bool inhibitMenu=false;
-  float scrollX=0;
 
-  if (e->isPlaying() && followPattern && (!e->isStepping() || pendingStepUpdate)) {
-    cursor.y=oldRow+((pendingStepUpdate)?1:0);
-    if (selStart.xCoarse==selEnd.xCoarse && selStart.xFine==selEnd.xFine && selStart.y==selEnd.y && !selecting) {
-      selStart=cursor;
-      selEnd=cursor;
+  if (e->isPlaying() && followPattern) {
+    if (oldRowChanged || !e->isStepping()) {
+      if (e->isStepping()) pendingStepUpdate=1;
+      cursor.y=oldRow;
+      if (selStart.xCoarse==selEnd.xCoarse && selStart.xFine==selEnd.xFine && selStart.y==selEnd.y && !selecting) {
+        selStart=cursor;
+        selEnd=cursor;
+      }
     }
   }
-  demandX=0;
   sel1=selStart;
   sel2=selEnd;
   if (sel2.y<sel1.y) {
@@ -374,27 +422,25 @@ void FurnaceGUI::drawPattern() {
     sel1.xFine^=sel2.xFine;
     sel2.xFine^=sel1.xFine;
   }
+  ImVec2 origWinPadding=ImGui::GetStyle().WindowPadding;
   ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,ImVec2(0.0f,0.0f));
   if (mobileUI) {
-    patWindowPos=(portrait?ImVec2(0.0f,(mobileMenuPos*-0.65*scrH*dpiScale)):ImVec2((0.16*scrH*dpiScale)+0.5*scrW*dpiScale*mobileMenuPos,0.0f));
-    patWindowSize=(portrait?ImVec2(scrW*dpiScale,scrH*dpiScale-(0.16*scrW*dpiScale)-(pianoOpen?(0.4*scrW*dpiScale):0.0f)):ImVec2(scrW*dpiScale-(0.16*scrH*dpiScale),scrH*dpiScale-(pianoOpen?(0.3*scrH*dpiScale):0.0f)));
+    patWindowPos=(portrait?ImVec2(0.0f,(mobileMenuPos*-0.65*canvasH)+(0.12*canvasW)):ImVec2((0.16*canvasH)+0.5*canvasW*mobileMenuPos,0.0f));
+    patWindowSize=(portrait?ImVec2(canvasW,canvasH-(0.16*canvasW)-(0.12*canvasW)-(pianoOpen?(0.4*canvasW):0.0f)):ImVec2(canvasW-(0.16*canvasH),canvasH-(pianoOpen?(0.3*canvasH):0.0f)));
     ImGui::SetNextWindowPos(patWindowPos);
     ImGui::SetNextWindowSize(patWindowSize);
   }
-  if (ImGui::Begin("Pattern",&patternOpen,globalWinFlags|(settings.avoidRaisingPattern?ImGuiWindowFlags_NoBringToFrontOnFocus:0))) {
+  if (ImGui::Begin("Pattern",&patternOpen,globalWinFlags|(settings.avoidRaisingPattern?ImGuiWindowFlags_NoBringToFrontOnFocus:0)|(settings.cursorFollowsWheel?ImGuiWindowFlags_NoScrollWithMouse:0),_("Pattern"))) {
     if (!mobileUI) {
       patWindowPos=ImGui::GetWindowPos();
       patWindowSize=ImGui::GetWindowSize();
     }
     //char id[32];
     ImGui::PushFont(patFont);
-    int ord=oldOrder;
-    if (followPattern) {
-      curOrder=e->getOrder();
-    }
-    oldOrder=curOrder;
+    int ord=curOrder;
     int chans=e->getTotalChannelCount();
     int displayChans=0;
+    float chanHeadBottom=0.0f;
     const DivPattern* patCache[DIV_MAX_CHANS];
     for (int i=0; i<chans; i++) {
       if (e->curSubSong->chanShow[i]) displayChans++;
@@ -403,23 +449,34 @@ void FurnaceGUI::drawPattern() {
     ImGui::PushStyleColor(ImGuiCol_Header,uiColors[GUI_COLOR_PATTERN_SELECTION]);
     ImGui::PushStyleColor(ImGuiCol_HeaderHovered,uiColors[GUI_COLOR_PATTERN_SELECTION_HOVER]);
     ImGui::PushStyleColor(ImGuiCol_HeaderActive,uiColors[GUI_COLOR_PATTERN_SELECTION_ACTIVE]);
-    if (ImGui::BeginTable("PatternView",displayChans+2,ImGuiTableFlags_BordersInnerV|ImGuiTableFlags_ScrollX|ImGuiTableFlags_ScrollY|ImGuiTableFlags_NoPadInnerX|ImGuiTableFlags_NoBordersInFrozenArea)) {
+    if (settings.centerPattern) {
+      float centerOff=(ImGui::GetContentRegionAvail().x-lastPatternWidth)*0.5;
+      if (centerOff>0.0f) {
+        ImGui::SetCursorPosX(ImGui::GetCursorPosX()+centerOff);
+      }
+    }
+    if (e->isPlaying() && followPattern && (!e->isStepping() || pendingStepUpdate)) updateScroll(oldRow);
+    if (--pendingStepUpdate<0) pendingStepUpdate=0;
+    if (nextScroll>-0.5f) {
+      ImGui::SetNextWindowScroll(ImVec2(-1.0f,nextScroll));
+      nextScroll=-1.0f;
+      nextAddScroll=0.0f;
+    }
+    ImDrawList* tdl=NULL;
+
+    if (chans<1) {
+      ImGui::Text(_("there aren't any channels to show."));
+    } else if (ImGui::BeginTable("PatternView",displayChans+2,ImGuiTableFlags_BordersInnerV|ImGuiTableFlags_ScrollX|ImGuiTableFlags_ScrollY|ImGuiTableFlags_NoPadInnerX|ImGuiTableFlags_NoBordersInFrozenArea|((settings.cursorFollowsWheel || wheelCalmDown)?ImGuiTableFlags_NoScrollWithMouse:0))) {
       ImGui::TableSetupColumn("pos",ImGuiTableColumnFlags_WidthFixed);
       char chanID[2048];
       float lineHeight=(ImGui::GetTextLineHeight()+2*dpiScale);
-      int curRow=e->getRow();
-      if (e->isPlaying() && followPattern && (!e->isStepping() || pendingStepUpdate)) updateScroll(curRow);
-      pendingStepUpdate=false;
-      if (nextScroll>-0.5f) {
-        ImGui::SetScrollY(nextScroll);
-        nextScroll=-1.0f;
-        nextAddScroll=0.0f;
-      }
+
       if (nextAddScroll!=0.0f) {
         ImGui::SetScrollY(ImGui::GetScrollY()+nextAddScroll);
         nextScroll=-1.0f;
         nextAddScroll=0.0f;
       }
+      
       ImGui::TableSetupScrollFreeze(1,1);
       for (int i=0; i<chans; i++) {
         if (!e->curSubSong->chanShow[i]) continue;
@@ -427,17 +484,12 @@ void FurnaceGUI::drawPattern() {
       }
       ImGui::TableNextRow();
       ImGui::TableNextColumn();
-      if (ImGui::Selectable((extraChannelButtons==2)?" --##ExtraChannelButtons":" ++##ExtraChannelButtons",false,ImGuiSelectableFlags_NoPadWithHalfSpacing,ImVec2(0.0f,lineHeight+1.0f*dpiScale))) {
-        if (++extraChannelButtons>2) extraChannelButtons=0;
+      float lpwStart=ImGui::GetCursorPosX();
+      if (ImGui::Selectable(" ++##ExtraChannelButtons",false,ImGuiSelectableFlags_NoPadWithHalfSpacing,ImVec2(0.0f,lineHeight+1.0f*dpiScale))) {
+        ImGui::OpenPopup("PatternOpt");
       }
-      if (ImGui::IsItemHovered()) {
-        if (extraChannelButtons==2) {
-          ImGui::SetTooltip("Pattern names (click to collapse)\nRight-click for visualizer");
-        } else if (extraChannelButtons==1) {
-          ImGui::SetTooltip("Expanded (click for pattern names)\nRight-click for visualizer");
-        } else {
-          ImGui::SetTooltip("Compact (click to expand)\nRight-click for visualizer");
-        }
+      if (ImGui::IsItemHovered() && !mobileUI) {
+        ImGui::SetTooltip(_("click for pattern options (effect columns/pattern names/visualizer)"));
       }
       if (ImGui::IsItemClicked(ImGuiMouseButton_Right)) {
         fancyPattern=!fancyPattern;
@@ -446,6 +498,42 @@ void FurnaceGUI::drawPattern() {
         e->getCommandStream(cmdStream);
         cmdStream.clear();
       }
+      ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,origWinPadding);
+      ImGui::PushFont(mainFont);
+      if (ImGui::BeginPopup("PatternOpt",ImGuiWindowFlags_NoMove|ImGuiWindowFlags_AlwaysAutoResize|ImGuiWindowFlags_NoTitleBar|ImGuiWindowFlags_NoSavedSettings)) {
+        ImGui::Text(_("Options:"));
+        ImGui::Indent();
+        ImGui::Checkbox(_("Effect columns/collapse"),&patExtraButtons);
+        ImGui::Checkbox(_("Pattern names"),&patChannelNames);
+        ImGui::Checkbox(_("Channel group hints"),&patChannelPairs);
+        if (ImGui::Checkbox(_("Visualizer"),&fancyPattern)) {
+          inhibitMenu=true;
+          e->enableCommandStream(fancyPattern);
+          e->getCommandStream(cmdStream);
+          cmdStream.clear();
+        }
+        ImGui::Unindent();
+
+        ImGui::Text(_("Channel status:"));
+        ImGui::Indent();
+        if (ImGui::RadioButton(_("No##_PCS0"),patChannelHints==0)) {
+          patChannelHints=0;
+        }
+        if (ImGui::RadioButton(_("Yes##_PCS1"),patChannelHints==1)) {
+          patChannelHints=1;
+        }
+        /*
+        if (ImGui::RadioButton(_("Regular##_PCS2"),patChannelHints==2)) {
+          patChannelHints=2;
+        }
+        if (ImGui::RadioButton(_("Detailed##_PCS3"),patChannelHints==3)) {
+          patChannelHints=3;
+        }*/
+        ImGui::Unindent();
+        ImGui::EndPopup();
+      }
+      ImGui::PopFont();
+      ImGui::PopStyleVar();
       for (int i=0; i<chans; i++) {
         if (!e->curSubSong->chanShow[i]) continue;
         ImGui::TableNextColumn();
@@ -459,6 +547,13 @@ void FurnaceGUI::drawPattern() {
 
         if (e->keyHit[i]) {
           keyHit1[i]=1.0f;
+
+          if (chanOscRandomPhase) {
+            chanOscChan[i].phaseOff=(float)rand()/(float)RAND_MAX;
+          } else {
+            chanOscChan[i].phaseOff=0.0f;
+          }
+
           if (settings.channelFeedbackStyle==1) {
             keyHit[i]=0.2;
             if (!muted) {
@@ -581,56 +676,56 @@ void FurnaceGUI::drawPattern() {
           minLabelArea.x+=0.5f*(maxLabelArea.x-minLabelArea.x-ImGui::CalcTextSize(chanID).x);
         }
 
-        if (extraChannelButtons==0 || settings.channelVolStyle!=0) ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,ImVec2(0.0f,0.0f));
+        if ((!patExtraButtons && !patChannelNames && !patChannelHints) || settings.channelVolStyle!=0) ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,ImVec2(0.0f,0.0f));
 
         ImGui::PushID(2048+i);
         switch (settings.channelStyle) {
           case 0: // classic
             ImGui::ItemSize(size,ImGui::GetStyle().FramePadding.y);
             if (ImGui::ItemAdd(rect,ImGui::GetID(chanID))) {
-              bool hovered=ImGui::ItemHoverable(rect,ImGui::GetID(chanID));
-              ImU32 col=hovered?ImGui::GetColorU32(ImGuiCol_HeaderHovered):ImGui::GetColorU32(ImGuiCol_Header);
+              bool hovered=ImGui::ItemHoverable(rect,ImGui::GetID(chanID),0);
+              ImU32 col=(hovered || (mobileUI && ImGui::IsMouseDown(ImGuiMouseButton_Left)))?ImGui::GetColorU32(ImGuiCol_HeaderHovered):ImGui::GetColorU32(ImGuiCol_Header);
               dl->AddRectFilled(rect.Min,rect.Max,col);
-              dl->AddText(ImVec2(minLabelArea.x,rect.Min.y),ImGui::GetColorU32(channelTextColor(i)),chanID);
+              dl->AddTextNoHashHide(ImVec2(minLabelArea.x,rect.Min.y),ImGui::GetColorU32(channelTextColor(i)),chanID);
             }
             break;
           case 1: { // line
             ImGui::ItemSize(size,ImGui::GetStyle().FramePadding.y);
             if (ImGui::ItemAdd(rect,ImGui::GetID(chanID))) {
-              bool hovered=ImGui::ItemHoverable(rect,ImGui::GetID(chanID));
+              bool hovered=ImGui::ItemHoverable(rect,ImGui::GetID(chanID),0);
               ImU32 fadeCol0=ImGui::GetColorU32(ImVec4(
                 chanHeadBase.x,
                 chanHeadBase.y,
                 chanHeadBase.z,
-                hovered?0.25f:0.0f
+                (hovered && (!mobileUI || ImGui::IsMouseDown(ImGuiMouseButton_Left)))?0.25f:0.0f
               ));
               ImU32 fadeCol=ImGui::GetColorU32(ImVec4(
                 chanHeadBase.x,
                 chanHeadBase.y,
                 chanHeadBase.z,
-                hovered?0.5f:MIN(1.0f,chanHeadBase.w*keyHit[i]*4.0f)
+                (hovered && (!mobileUI || ImGui::IsMouseDown(ImGuiMouseButton_Left)))?0.5f:MIN(1.0f,chanHeadBase.w*keyHit[i]*4.0f)
               ));
               dl->AddRectFilledMultiColor(rect.Min,rect.Max,fadeCol0,fadeCol0,fadeCol,fadeCol);
               dl->AddLine(ImVec2(rect.Min.x,rect.Max.y),ImVec2(rect.Max.x,rect.Max.y),ImGui::GetColorU32(chanHeadBase),2.0f*dpiScale);
-              dl->AddText(ImVec2(minLabelArea.x,rect.Min.y+3.0*dpiScale),ImGui::GetColorU32(channelTextColor(i)),chanID);
+              dl->AddTextNoHashHide(ImVec2(minLabelArea.x,rect.Min.y+3.0*dpiScale),ImGui::GetColorU32(channelTextColor(i)),chanID);
             }
             break;
           }
           case 2: { // round
             ImGui::ItemSize(size,ImGui::GetStyle().FramePadding.y);
             if (ImGui::ItemAdd(rect,ImGui::GetID(chanID))) {
-              bool hovered=ImGui::ItemHoverable(rect,ImGui::GetID(chanID));
+              bool hovered=ImGui::ItemHoverable(rect,ImGui::GetID(chanID),0);
               ImU32 fadeCol0=ImGui::GetColorU32(ImVec4(
                 chanHeadBase.x,
                 chanHeadBase.y,
                 chanHeadBase.z,
-                hovered?0.5f:MIN(1.0f,0.3f+chanHeadBase.w*keyHit[i]*1.5f)
+                (hovered && (!mobileUI || ImGui::IsMouseDown(ImGuiMouseButton_Left)))?0.5f:MIN(1.0f,0.3f+chanHeadBase.w*keyHit[i]*1.5f)
               ));
               ImU32 fadeCol=ImGui::GetColorU32(ImVec4(
                 chanHeadBase.x,
                 chanHeadBase.y,
                 chanHeadBase.z,
-                hovered?0.3f:MIN(1.0f,0.2f+chanHeadBase.w*keyHit[i]*1.2f)
+                (hovered && (!mobileUI || ImGui::IsMouseDown(ImGuiMouseButton_Left)))?0.3f:MIN(1.0f,0.2f+chanHeadBase.w*keyHit[i]*1.2f)
               ));
               ImVec2 rMin=rect.Min;
               ImVec2 rMax=rect.Max;
@@ -639,14 +734,14 @@ void FurnaceGUI::drawPattern() {
               rMax.x-=3.0f*dpiScale;
               rMax.y-=6.0f*dpiScale;
               dl->AddRectFilledMultiColor(rMin,rMax,fadeCol0,fadeCol0,fadeCol,fadeCol,4.0f*dpiScale);
-              dl->AddText(ImVec2(minLabelArea.x,rect.Min.y+6.0*dpiScale),ImGui::GetColorU32(channelTextColor(i)),chanID);
+              dl->AddTextNoHashHide(ImVec2(minLabelArea.x,rect.Min.y+6.0*dpiScale),ImGui::GetColorU32(channelTextColor(i)),chanID);
             }
             break;
           }
           case 3: // split button
             ImGui::Dummy(ImVec2(1.0f,2.0f*dpiScale));
-            ImGui::SetCursorPosX(minLabelArea.x);
-            ImGui::TextUnformatted(chanID);
+            //ImGui::SetCursorPosX(minLabelArea.x);
+            ImGui::TextNoHashHide("%s",chanID);
             ImGui::SameLine();
             ImGui::PushFont(mainFont);
             ImGui::SmallButton(muted?ICON_FA_VOLUME_OFF:ICON_FA_VOLUME_UP);
@@ -655,12 +750,12 @@ void FurnaceGUI::drawPattern() {
           case 4: { // square border
             ImGui::ItemSize(size,ImGui::GetStyle().FramePadding.y);
             if (ImGui::ItemAdd(rect,ImGui::GetID(chanID))) {
-              bool hovered=ImGui::ItemHoverable(rect,ImGui::GetID(chanID));
+              bool hovered=ImGui::ItemHoverable(rect,ImGui::GetID(chanID),0);
               ImU32 fadeCol=ImGui::GetColorU32(ImVec4(
                 chanHeadBase.x,
                 chanHeadBase.y,
                 chanHeadBase.z,
-                hovered?1.0f:MIN(1.0f,0.2f+chanHeadBase.w*keyHit[i]*4.0f)
+                (hovered && (!mobileUI || ImGui::IsMouseDown(ImGuiMouseButton_Left)))?1.0f:MIN(1.0f,0.2f+chanHeadBase.w*keyHit[i]*4.0f)
               ));
               ImVec2 rMin=rect.Min;
               ImVec2 rMax=rect.Max;
@@ -669,19 +764,19 @@ void FurnaceGUI::drawPattern() {
               rMax.x-=3.0f*dpiScale;
               rMax.y-=3.0f*dpiScale;
               dl->AddRect(rMin,rMax,fadeCol,0.0f,2.0*dpiScale);
-              dl->AddText(ImVec2(minLabelArea.x,rect.Min.y+3.0*dpiScale),ImGui::GetColorU32(channelTextColor(i)),chanID);
+              dl->AddTextNoHashHide(ImVec2(minLabelArea.x,rect.Min.y+3.0*dpiScale),ImGui::GetColorU32(channelTextColor(i)),chanID);
             }
             break;
           }
           case 5: { // round border
             ImGui::ItemSize(size,ImGui::GetStyle().FramePadding.y);
             if (ImGui::ItemAdd(rect,ImGui::GetID(chanID))) {
-              bool hovered=ImGui::ItemHoverable(rect,ImGui::GetID(chanID));
+              bool hovered=ImGui::ItemHoverable(rect,ImGui::GetID(chanID),0);
               ImU32 fadeCol=ImGui::GetColorU32(ImVec4(
                 chanHeadBase.x,
                 chanHeadBase.y,
                 chanHeadBase.z,
-                hovered?1.0f:MIN(1.0f,0.2f+chanHeadBase.w*keyHit[i]*4.0f)
+                (hovered && (!mobileUI || ImGui::IsMouseDown(ImGuiMouseButton_Left)))?1.0f:MIN(1.0f,0.2f+chanHeadBase.w*keyHit[i]*4.0f)
               ));
               ImVec2 rMin=rect.Min;
               ImVec2 rMax=rect.Max;
@@ -690,32 +785,49 @@ void FurnaceGUI::drawPattern() {
               rMax.x-=3.0f*dpiScale;
               rMax.y-=3.0f*dpiScale;
               dl->AddRect(rMin,rMax,fadeCol,4.0f*dpiScale,ImDrawFlags_RoundCornersAll,2.0*dpiScale);
-              dl->AddText(ImVec2(minLabelArea.x,rect.Min.y+3.0*dpiScale),ImGui::GetColorU32(channelTextColor(i)),chanID);
+              dl->AddTextNoHashHide(ImVec2(minLabelArea.x,rect.Min.y+3.0*dpiScale),ImGui::GetColorU32(channelTextColor(i)),chanID);
             }
             break;
           }
         }
         ImGui::PopID();
 
-        if (extraChannelButtons==0 || settings.channelVolStyle!=0) ImGui::PopStyleVar();
+        if ((!patExtraButtons && !patChannelNames && !patChannelHints) || settings.channelVolStyle!=0) ImGui::PopStyleVar();
 
-        if (displayTooltip && ImGui::IsItemHovered()) {
+        if (displayTooltip && ImGui::IsItemHovered() && !mobileUI) {
           ImGui::SetTooltip("%s",e->getChannelName(i));
         }
         if (settings.channelFont==0) ImGui::PopFont();
-        if (ImGui::IsItemClicked(ImGuiMouseButton_Left)) {
-          if (settings.soloAction!=1 && soloTimeout>0 && soloChan==i) {
-            e->toggleSolo(i);
-            soloTimeout=0;
-          } else {
-            e->toggleMute(i);
-            soloTimeout=20;
-            soloChan=i;
+        if (mobileUI) {
+          if (ImGui::IsItemHovered()) {
+            if (CHECK_LONG_HOLD) {
+              NOTIFY_LONG_HOLD;
+              e->toggleSolo(i);
+              soloChan=i;
+            }
+            if (ImGui::IsMouseReleased(ImGuiMouseButton_Left) && !ImGui::WasInertialScroll()) {
+              if (soloChan!=i) {
+                e->toggleMute(i);
+              } else {
+                soloChan=-1;
+              }
+            }
+          } 
+        } else {
+          if (ImGui::IsItemClicked(ImGuiMouseButton_Left)) {
+            if (settings.soloAction!=1 && soloTimeout>0 && soloChan==i) {
+              e->toggleSolo(i);
+              soloTimeout=0;
+            } else {
+              e->toggleMute(i);
+              soloTimeout=settings.doubleClickTime;
+              soloChan=i;
+            }
           }
         }
         if (muted) ImGui::PopStyleColor();
         ImGui::PopStyleColor(4);
-        if (settings.soloAction!=2) if (ImGui::IsItemClicked(ImGuiMouseButton_Right)) {
+        if (settings.soloAction!=2 && !mobileUI) if (ImGui::IsItemClicked(ImGuiMouseButton_Right)) {
           inhibitMenu=true;
           e->toggleSolo(i);
         }
@@ -748,13 +860,14 @@ void FurnaceGUI::drawPattern() {
 
             if (e->isRunning()) {
               DivChannelState* cs=e->getChanState(i);
-              float stereoPan=(float)(e->convertPanSplitToLinearLR(cs->panL,cs->panR,256)-128)/128.0;
+              unsigned short chanPan=e->getChanPan(i);
+              float stereoPan=(float)(e->convertPanSplitToLinear(chanPan,8,256)-128)/128.0;
               switch (settings.channelVolStyle) {
                 case 1: // simple
-                  xRight=((float)(e->getChanState(i)->volume>>8)/(float)e->getMaxVolumeChan(i))*0.9+(keyHit1[i]*0.1f);
+                  xRight=((float)(cs->volume>>8)/(float)e->getMaxVolumeChan(i))*0.9+(keyHit1[i]*0.1f);
                   break;
                 case 2: { // stereo
-                  float amount=((float)(e->getChanState(i)->volume>>8)/(float)e->getMaxVolumeChan(i))*0.4+(keyHit1[i]*0.1f);
+                  float amount=((float)(cs->volume>>8)/(float)e->getMaxVolumeChan(i))*0.4+(keyHit1[i]*0.1f);
                   xRight=0.5+amount*(1.0+MIN(0.0,stereoPan));
                   xLeft=0.5-amount*(1.0-MAX(0.0,stereoPan));
                   break;
@@ -774,40 +887,11 @@ void FurnaceGUI::drawPattern() {
                 ImGui::GetColorU32(chanHeadBase)
               );
             }
-            keyHit1[i]-=0.2f;
-            if (keyHit1[i]<0.0f) keyHit1[i]=0.0f;
           }
         }
         
         // extra buttons
-        if (extraChannelButtons==2) {
-          DivPattern* pat=e->curPat[i].getPattern(e->curOrders->ord[i][ord],true);
-          ImGui::PushFont(mainFont);
-          if (patNameTarget==i) {
-            snprintf(chanID,2048,"##PatNameI%d_%d",i,ord);
-            ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x-(8.0f*dpiScale));
-            ImGui::SetCursorPosX(ImGui::GetCursorPosX()+4.0f*dpiScale);
-            ImGui::InputText(chanID,&pat->name);
-            if (wantPatName) {
-              wantPatName=false;
-              ImGui::SetItemDefaultFocus();
-              ImGui::SetKeyboardFocusHere(-1);
-            } else {
-              if (!ImGui::IsItemActive()) {
-                patNameTarget=-1;
-              }
-            }
-          } else {
-            snprintf(chanID,2048," %s##PatName%d",pat->name.c_str(),i);
-            if (ImGui::Selectable(chanID,true,ImGuiSelectableFlags_NoPadWithHalfSpacing,ImVec2(0.0f,lineHeight+1.0f*dpiScale))) {
-              patNameTarget=i;
-              wantPatName=true;
-              snprintf(chanID,2048,"##PatNameI%d_%d",i,ord);
-              ImGui::SetActiveID(ImGui::GetID(chanID),ImGui::GetCurrentWindow());
-            }
-          }
-          ImGui::PopFont();
-        } else if (extraChannelButtons==1) {
+        if (patExtraButtons) {
           snprintf(chanID,2048,"%c##_HCH%d",e->curSubSong->chanCollapse[i]?'+':'-',i);
           ImGui::SetCursorPosX(ImGui::GetCursorPosX()+4.0f*dpiScale);
           if (ImGui::SmallButton(chanID)) {
@@ -827,18 +911,190 @@ void FurnaceGUI::drawPattern() {
             }
             ImGui::EndDisabled();
             ImGui::SameLine();
-            ImGui::BeginDisabled(e->curPat[i].effectCols>=8);
+            ImGui::BeginDisabled(e->curPat[i].effectCols>=DIV_MAX_EFFECTS);
             snprintf(chanID,2048,">##_RCH%d",i);
             if (ImGui::SmallButton(chanID)) {
               e->curPat[i].effectCols++;
-              if (e->curPat[i].effectCols>8) e->curPat[i].effectCols=8;
+              if (e->curPat[i].effectCols>DIV_MAX_EFFECTS) e->curPat[i].effectCols=DIV_MAX_EFFECTS;
             }
             ImGui::EndDisabled();
           }
           ImGui::Spacing();
         }
+
+        if (patChannelNames) {
+          DivPattern* pat=e->curPat[i].getPattern(e->curOrders->ord[i][ord],true);
+          ImGui::PushFont(mainFont);
+          snprintf(chanID,2048," %s##PatName%d",pat->name.c_str(),i);
+          if (ImGui::Selectable(chanID,true,ImGuiSelectableFlags_NoPadWithHalfSpacing,ImVec2(0.0f,lineHeight+1.0f*dpiScale))) {
+            editStr(&pat->name);
+          }
+          ImGui::PopFont();
+        }
+
+        if (patChannelHints) {
+          ImGuiWindow* win=ImGui::GetCurrentWindow();
+          ImVec2 posMin=win->DC.CursorPos;
+          ImGui::Dummy(ImVec2(dpiScale,settings.iconSize*dpiScale));
+          ImVec2 posMax=ImVec2(win->WorkRect.Max.x,win->WorkRect.Max.y);
+          posMin.y-=ImGui::GetStyle().ItemSpacing.y*0.5;
+          ImDrawList* dl=ImGui::GetWindowDrawList();
+          ImVec2 iconPos[6];
+          DivChannelState* cs=e->getChanState(i);
+          if (cs!=NULL) {
+            DivChannelModeHints hints=e->getChanModeHints(i);
+            if (hints.count>4) hints.count=4;
+            int hintCount=3+hints.count;
+
+            // calculate icon size
+            for (int i=0; i<hintCount; i++) {
+              iconPos[i]=ImLerp(posMin,posMax,ImVec2((float)(2*i+1)/(float)(hintCount*2),0.0f));
+            }
+
+            // 1. ON/OFF
+            ImVec4 onOffColor;
+            if (cs->keyOn) {
+              if (cs->releasing) {
+                onOffColor=uiColors[GUI_COLOR_PATTERN_STATUS_REL_ON];
+              } else {
+                onOffColor=uiColors[GUI_COLOR_PATTERN_STATUS_ON];
+              }
+            } else {
+              if (cs->releasing) {
+                onOffColor=uiColors[GUI_COLOR_PATTERN_STATUS_REL];
+              } else {
+                onOffColor=uiColors[GUI_COLOR_PATTERN_STATUS_OFF];
+              }
+            }
+            iconPos[0].x-=mainFont->CalcTextSizeA(mainFont->FontSize,FLT_MAX,0.0f,ICON_FA_SQUARE).x*0.5f;
+            dl->AddText(mainFont,settings.mainFontSize*dpiScale,iconPos[0],ImGui::GetColorU32(onOffColor),ICON_FA_SQUARE);
+
+            // 2. PITCH SLIDE/VIBRATO
+            ImVec4 pitchColor;
+            const char* pitchIcon=ICON_FUR_SINE;
+            if (cs->inPorta) {
+              pitchIcon=ICON_FA_SHARE;
+              pitchColor=uiColors[GUI_COLOR_PATTERN_STATUS_PITCH];
+            } else if (cs->portaSpeed>0) {
+              if (cs->portaNote>=60) {
+                pitchIcon=ICON_FA_CHEVRON_UP;
+              } else {
+                pitchIcon=ICON_FA_CHEVRON_DOWN;
+              }
+              pitchColor=uiColors[GUI_COLOR_PATTERN_STATUS_PITCH];
+            } else if (cs->vibratoDepth>0) {
+              pitchIcon=ICON_FUR_SINE;
+              pitchColor=uiColors[GUI_COLOR_PATTERN_STATUS_PITCH];
+            } else if (cs->arp) {
+              pitchIcon=ICON_FA_BARS;
+              pitchColor=uiColors[GUI_COLOR_PATTERN_STATUS_NOTE];
+            } else {
+              pitchColor=uiColors[GUI_COLOR_PATTERN_STATUS_OFF];
+            }
+            iconPos[1].x-=mainFont->CalcTextSizeA(mainFont->FontSize,FLT_MAX,0.0f,pitchIcon).x*0.5f;
+            dl->AddText(mainFont,settings.mainFontSize*dpiScale,iconPos[1],ImGui::GetColorU32(pitchColor),pitchIcon);
+
+
+            // 3. VOLUME
+            ImVec4 volColor;
+            const char* volIcon=ICON_FA_MINUS;
+            if (cs->tremoloDepth>0) {
+              volIcon=ICON_FUR_SINE;
+              volColor=uiColors[GUI_COLOR_PATTERN_STATUS_VOLUME];
+            } else if (cs->volSpeed) {
+              if (cs->volSpeed>0) {
+                volIcon=ICON_FA_CHEVRON_UP;
+              } else {
+                volIcon=ICON_FA_CHEVRON_DOWN;
+              }
+              volColor=uiColors[GUI_COLOR_PATTERN_STATUS_VOLUME];
+            } else {
+              volColor=uiColors[GUI_COLOR_PATTERN_STATUS_OFF];
+            }
+            iconPos[2].x-=mainFont->CalcTextSizeA(mainFont->FontSize,FLT_MAX,0.0f,volIcon).x*0.5f;
+            dl->AddText(mainFont,settings.mainFontSize*dpiScale,iconPos[2],ImGui::GetColorU32(volColor),volIcon);
+
+            // 4. OTHER
+            for (int i=0; i<hints.count; i++) {
+              if (hints.hint[i]==NULL) continue;
+              ImVec4 hintColor=uiColors[GUI_COLOR_PATTERN_STATUS_OFF];
+              switch (hints.type[i]) {
+                case 0:
+                  hintColor=uiColors[GUI_COLOR_PATTERN_STATUS_OFF];
+                  break;
+                case 1:
+                  hintColor=uiColors[GUI_COLOR_PATTERN_STATUS_VOLUME];
+                  break;
+                case 2:
+                  hintColor=uiColors[GUI_COLOR_PATTERN_STATUS_PITCH];
+                  break;
+                case 3:
+                  hintColor=uiColors[GUI_COLOR_PATTERN_STATUS_PANNING];
+                  break;
+                case 4:
+                  hintColor=uiColors[GUI_COLOR_PATTERN_STATUS_SYS1];
+                  break;
+                case 5:
+                  hintColor=uiColors[GUI_COLOR_PATTERN_STATUS_SYS2];
+                  break;
+                case 6:
+                  hintColor=uiColors[GUI_COLOR_PATTERN_STATUS_MIXING];
+                  break;
+                case 7:
+                  hintColor=uiColors[GUI_COLOR_PATTERN_STATUS_DSP];
+                  break;
+                case 8:
+                  hintColor=uiColors[GUI_COLOR_PATTERN_STATUS_NOTE];
+                  break;
+                case 9:
+                  hintColor=uiColors[GUI_COLOR_PATTERN_STATUS_MISC1];
+                  break;
+                case 10:
+                  hintColor=uiColors[GUI_COLOR_PATTERN_STATUS_MISC2];
+                  break;
+                case 11:
+                  hintColor=uiColors[GUI_COLOR_PATTERN_STATUS_MISC3];
+                  break;
+                case 12:
+                  hintColor=uiColors[GUI_COLOR_PATTERN_STATUS_ATTACK];
+                  break;
+                case 13:
+                  hintColor=uiColors[GUI_COLOR_PATTERN_STATUS_DECAY];
+                  break;
+                case 14:
+                  hintColor=uiColors[GUI_COLOR_PATTERN_STATUS_SUSTAIN];
+                  break;
+                case 15:
+                  hintColor=uiColors[GUI_COLOR_PATTERN_STATUS_RELEASE];
+                  break;
+                case 16:
+                  hintColor=uiColors[GUI_COLOR_PATTERN_STATUS_DEC_LINEAR];
+                  break;
+                case 17:
+                  hintColor=uiColors[GUI_COLOR_PATTERN_STATUS_DEC_EXP];
+                  break;
+                case 18:
+                  hintColor=uiColors[GUI_COLOR_PATTERN_STATUS_INC];
+                  break;
+                case 19:
+                  hintColor=uiColors[GUI_COLOR_PATTERN_STATUS_BENT];
+                  break;
+                case 20:
+                  hintColor=uiColors[GUI_COLOR_PATTERN_STATUS_DIRECT];
+                  break;
+                default:
+                  hintColor=uiColors[GUI_COLOR_TEXT];
+                  break;
+              }
+              iconPos[i+3].x-=mainFont->CalcTextSizeA(mainFont->FontSize,FLT_MAX,0.0f,hints.hint[i]).x*0.5f;
+              dl->AddText(mainFont,settings.mainFontSize*dpiScale,iconPos[i+3],ImGui::GetColorU32(hintColor),hints.hint[i]);
+            }
+          }
+        }
+        chanHeadBottom=ImGui::GetCursorScreenPos().y-ImGui::GetStyle().ItemSpacing.y;
       }
       ImGui::TableNextColumn();
+      lastPatternWidth=ImGui::GetCursorPosX()-lpwStart+ImGui::GetStyle().ScrollbarSize;
       if (e->hasExtValue()) {
         ImGui::TextColored(uiColors[GUI_COLOR_EE_VALUE]," %.2X",e->getExtValue());
       }
@@ -901,23 +1157,65 @@ void FurnaceGUI::drawPattern() {
           ImGui::TableNextColumn();
         }
       }
+
       ImGui::EndDisabled();
       ImGui::PopStyleVar();
-      oldRow=curRow;
       if (demandScrollX) {
-        int totalDemand=demandX-ImGui::GetScrollX();
-        if (totalDemand<80) {
-          ImGui::SetScrollX(demandX-200*dpiScale);
-        } else if (totalDemand>(ImGui::GetWindowWidth()-200*dpiScale)) {
-          ImGui::SetScrollX(demandX+200*dpiScale);
+        float finalX=-fourChars.x;
+        // manually calculate X scroll
+        for (int i=0; i<=cursor.xCoarse; i++) {
+          int fine=(i==cursor.xCoarse)?cursor.xFine:9999;
+          if (!e->curSubSong->chanShow[i]) continue;
+
+          finalX+=noteCellSize.x;
+          // ins
+          if (fine==0) break;
+          if (e->curSubSong->chanCollapse[i]<3) {
+            finalX+=insCellSize.x;
+          }
+          // vol
+          if (fine==1) break;
+          if (e->curSubSong->chanCollapse[i]<2) {
+            finalX+=volCellSize.x;
+          }
+          // effects
+          if (fine==2) break;
+          if (e->curSubSong->chanCollapse[i]<1) {
+            for (int j=0; j<MIN(fine-2,e->curPat[i].effectCols*2); j++) {
+              if (j&1) {
+                finalX+=effectValCellSize.x;
+              } else {
+                finalX+=effectCellSize.x;
+              }
+            }
+          }
+        }
+        float totalDemand=finalX-ImGui::GetScrollX();
+        float availWidth=ImGui::GetWindowWidth();
+        if (totalDemand<(availWidth*0.25f)) {
+          ImGui::SetScrollX(finalX-availWidth*0.25f);
+        } else if (totalDemand>(availWidth*0.7f)) {
+          ImGui::SetScrollX(finalX-availWidth*0.7f);
         }
         demandScrollX=false;
       }
-      scrollX=ImGui::GetScrollX();
+
+      // cursor follows wheel
+      if (settings.cursorFollowsWheel && (!e->isPlaying() || !followPattern) && ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows)) {
+        if (wheelX!=0 || wheelY!=0) {
+          int xAmount=wheelX;
+          int yAmount=(settings.cursorFollowsWheel==2)?wheelY:-wheelY;
+          if (settings.cursorWheelStep==1) {
+            xAmount*=MAX(1,editStep);
+            yAmount*=MAX(1,editStep);
+          }
+          moveCursor(xAmount,yAmount,false);
+        }
+      }
 
       // overflow changes order
-      // TODO: this is very unreliable and sometimes it can warp you out of the song
-      if (settings.scrollChangesOrder && !e->isPlaying()) {
+      if (--wheelCalmDown<0) wheelCalmDown=0;
+      if (settings.scrollChangesOrder && (!e->isPlaying() || !followPattern) && ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows) && !settings.cursorFollowsWheel && !wheelCalmDown) {
         if (wheelY!=0) {
           if (wheelY>0) {
             if (ImGui::GetScrollY()<=0) {
@@ -926,6 +1224,12 @@ void FurnaceGUI::drawPattern() {
                   setOrder(curOrder-1);
                   ImGui::SetScrollY(ImGui::GetScrollMaxY());
                   updateScroll(e->curSubSong->patLen);
+                  wheelCalmDown=2;
+                } else if (settings.scrollChangesOrder==2) {
+                  setOrder(e->curSubSong->ordersLen-1);
+                  ImGui::SetScrollY(ImGui::GetScrollMaxY());
+                  updateScroll(e->curSubSong->patLen);
+                  wheelCalmDown=2;
                 }
                 haveHitBounds=false;
               } else {
@@ -941,6 +1245,12 @@ void FurnaceGUI::drawPattern() {
                   setOrder(curOrder+1);
                   ImGui::SetScrollY(0);
                   updateScroll(0);
+                  wheelCalmDown=2;
+                } else if (settings.scrollChangesOrder==2) {
+                  setOrder(0);
+                  ImGui::SetScrollY(0);
+                  updateScroll(0);
+                  wheelCalmDown=2;
                 }
                 haveHitBounds=false;
               } else {
@@ -952,13 +1262,230 @@ void FurnaceGUI::drawPattern() {
           }
         }
       }
+      // HACK: rendering here would cause the pairs to be drawn behind the pattern for some reason...
+      // ...so we capture the table's window draw list...
+      tdl=ImGui::GetWindowDrawList();
       ImGui::EndTable();
     }
+
+    // ...and then use it here
+    ImGui::PushFont(mainFont);
+    if (patChannelPairs && e->isRunning() && tdl!=NULL) { // pair hints
+      float pos=0.0f;
+      float posCenter=0.0f;
+      float posMin=FLT_MAX;
+      float posMax=-FLT_MAX;
+      ImVec2 textSize;
+      unsigned int floors[4][4]; // bit array
+      std::vector<DelayedLabel> delayedLabels;
+
+      memset(floors,0,4*4*sizeof(unsigned int));
+
+      for (int i=0; i<chans; i++) {
+        bool isPaired=false;
+        int numPairs=0;
+        unsigned int pairMin=i;
+        unsigned int pairMax=i;
+        unsigned char curFloor=0;
+        if (!e->curSubSong->chanShow[i]) {
+          continue;
+        }
+
+        DivChannelPair pairs=e->getChanPaired(i);
+        for (int j=0; j<8; j++) {
+          if (pairs.pairs[j]==-1) continue;
+          int pairCh=e->dispatchFirstChan[i]+pairs.pairs[j];
+          if (!e->curSubSong->chanShow[pairCh]) {
+            continue;
+          }
+          isPaired=true;
+          if ((unsigned int)pairCh<pairMin) pairMin=pairCh;
+          if ((unsigned int)pairCh>pairMax) pairMax=pairCh;
+        }
+
+        if (!isPaired) continue;
+
+        float posY=chanHeadBottom;
+
+        // find a free floor
+        while (curFloor<4) {
+          bool free=true;
+          for (unsigned int j=pairMin; j<=pairMax; j++) {
+            const unsigned int j0=j>>5;
+            const unsigned int j1=1U<<(j&31);
+            if (floors[curFloor][j0]&j1) {
+              free=false;
+              break;
+            }
+          }
+          if (free) break;
+          curFloor++;
+        }
+        if (curFloor<4) {
+          // occupy floor
+          floors[curFloor][pairMin>>5]|=1U<<(pairMin&31);
+          floors[curFloor][pairMax>>5]|=1U<<(pairMax&31);
+        }
+
+        pos=(patChanX[i+1]+patChanX[i])*0.5;
+        posCenter=pos;
+        posMin=pos;
+        posMax=pos;
+        numPairs++;
+
+        if (pairs.label==NULL) {
+          textSize=ImGui::CalcTextSize("???");
+        } else {
+          textSize=ImGui::CalcTextSize(pairs.label);
+        }
+
+        posY+=(textSize.y+ImGui::GetStyle().ItemSpacing.y)*curFloor;
+
+        tdl->AddLine(
+          ImVec2(pos,chanHeadBottom),
+          ImVec2(pos,posY+textSize.y),
+          ImGui::GetColorU32(uiColors[GUI_COLOR_PATTERN_PAIR]),
+          2.0f*dpiScale
+        );
+
+        for (int j=0; j<8; j++) {
+          if (pairs.pairs[j]==-1) continue;
+          int pairCh=e->dispatchFirstChan[i]+pairs.pairs[j];
+          if (!e->curSubSong->chanShow[pairCh]) {
+            continue;
+          }
+
+          pos=(patChanX[pairCh+1]+patChanX[pairCh])*0.5;
+          posCenter+=pos;
+          numPairs++;
+          if (pos<posMin) posMin=pos;
+          if (pos>posMax) posMax=pos;
+          tdl->AddLine(
+            ImVec2(pos,chanHeadBottom),
+            ImVec2(pos,posY+textSize.y),
+            ImGui::GetColorU32(uiColors[GUI_COLOR_PATTERN_PAIR]),
+            2.0f*dpiScale
+          );
+        }
+
+        posCenter/=numPairs;
+
+        if (pairs.label==NULL) {
+          tdl->AddLine(
+            ImVec2(posMin,posY+textSize.y),
+            ImVec2(posMax,posY+textSize.y),
+            ImGui::GetColorU32(uiColors[GUI_COLOR_PATTERN_PAIR]),
+            2.0f*dpiScale
+          );
+        } else {
+          tdl->AddLine(
+            ImVec2(posMin,posY+textSize.y),
+            ImVec2(posCenter-textSize.x*0.5-6.0f*dpiScale,posY+textSize.y),
+            ImGui::GetColorU32(uiColors[GUI_COLOR_PATTERN_PAIR]),
+            2.0f*dpiScale
+          );
+          tdl->AddLine(
+            ImVec2(posCenter+textSize.x*0.5+6.0f*dpiScale,posY+textSize.y),
+            ImVec2(posMax,posY+textSize.y),
+            ImGui::GetColorU32(uiColors[GUI_COLOR_PATTERN_PAIR]),
+            2.0f*dpiScale
+          );
+
+          delayedLabels.push_back(DelayedLabel(posCenter,posY,textSize,pairs.label));
+        }
+      }
+
+      for (DelayedLabel& i: delayedLabels) {
+        ImGui::RenderFrameDrawList(
+          tdl,
+          ImVec2(i.posCenter-i.textSize.x*0.5-6.0f*dpiScale,i.posY+i.textSize.y*0.5-3.0f*dpiScale),
+          ImVec2(i.posCenter+i.textSize.x*0.5+6.0f*dpiScale,i.posY+i.textSize.y*1.5+3.0f*dpiScale),
+          ImGui::GetColorU32(ImGuiCol_FrameBg),
+          true,
+          ImGui::GetStyle().FrameRounding
+        );
+
+        tdl->AddText(
+          ImVec2(i.posCenter-i.textSize.x*0.5,i.posY+i.textSize.y*0.5),
+          ImGui::GetColorU32(ImGuiCol_Text),
+          i.label
+        );
+      }
+    }
+
+    // also let's draw a warning if the instrument cannot be previewed
+    if (tdl!=NULL && failedNoteOn) {
+      ImVec2 winCenter=ImGui::GetWindowPos()+ImGui::GetWindowSize()*0.5f;
+      ImGui::PushFont(bigFont);
+      ImVec2 warnHeadSize=ImGui::CalcTextSize(_("WARNING!!"));
+      ImGui::PopFont();
+      ImVec2 warnTextSize1=ImGui::CalcTextSize(_("this instrument cannot be previewed because"));
+      ImVec2 warnTextSize2=ImGui::CalcTextSize(_("none of the chips can play it"));
+      ImVec2 warnTextSize3=ImGui::CalcTextSize(_("your instrument is in peril!! be careful..."));
+
+      float maxTextSize=warnHeadSize.x;
+      if (warnTextSize1.x>maxTextSize) maxTextSize=warnTextSize1.x;
+      if (warnTextSize2.x>maxTextSize) maxTextSize=warnTextSize2.x;
+      if (warnTextSize3.x>maxTextSize) maxTextSize=warnTextSize3.x;
+
+      ImVec2 sumOfAll=ImVec2(
+        maxTextSize,
+        warnHeadSize.y+warnTextSize1.y+warnTextSize2.y+warnTextSize3.y
+      );
+
+      ImGui::RenderFrameDrawList(
+        tdl,
+        ImVec2(winCenter.x-sumOfAll.x*0.5-ImGui::GetStyle().ItemInnerSpacing.x,winCenter.y-sumOfAll.y*0.5-ImGui::GetStyle().ItemInnerSpacing.y),
+        ImVec2(winCenter.x+sumOfAll.x*0.5+ImGui::GetStyle().ItemInnerSpacing.x,winCenter.y+sumOfAll.y*0.5+ImGui::GetStyle().ItemInnerSpacing.y),
+        ImGui::GetColorU32(ImGuiCol_FrameBg),
+        true,
+        ImGui::GetStyle().FrameRounding
+      );
+
+      float whereY=winCenter.y-sumOfAll.y*0.5;
+
+      tdl->AddText(
+        bigFont,
+        MAX(1,40*dpiScale),
+        ImVec2(winCenter.x-warnHeadSize.x*0.5,whereY),
+        ImGui::GetColorU32(ImGuiCol_Text),
+        _("WARNING!!")
+      );
+      whereY+=warnHeadSize.y;
+
+      tdl->AddText(
+        ImVec2(winCenter.x-warnTextSize1.x*0.5,whereY),
+        ImGui::GetColorU32(ImGuiCol_Text),
+        _("this instrument cannot be previewed because")
+      );
+      whereY+=warnTextSize1.y;
+
+      tdl->AddText(
+        ImVec2(winCenter.x-warnTextSize2.x*0.5,whereY),
+        ImGui::GetColorU32(ImGuiCol_Text),
+        _("none of the chips can play it")
+      );
+      whereY+=warnTextSize2.y;
+
+      tdl->AddText(
+        ImVec2(winCenter.x-warnTextSize3.x*0.5,whereY),
+        ImGui::GetColorU32(ImGuiCol_Text),
+        _("your instrument is in peril!! be careful...")
+      );
+      whereY+=warnTextSize3.y;
+    }
+    ImGui::PopFont();
 
     if (fancyPattern) { // visualizer
       e->getCommandStream(cmdStream);
       ImDrawList* dl=ImGui::GetWindowDrawList();
-      ImVec2 off=ImGui::GetWindowPos();
+      ImVec2 off=ImVec2(0.0f,ImGui::GetWindowPos().y);
+
+      ImVec2 winMin=ImGui::GetWindowPos();
+      ImVec2 winMax=ImVec2(
+        winMin.x+ImGui::GetWindowSize().x,
+        winMin.y+ImGui::GetWindowSize().y
+      );
       
       // commands
       for (DivCommand& i: cmdStream) {
@@ -969,7 +1496,6 @@ void FurnaceGUI::drawPattern() {
         if (i.cmd==DIV_CMD_PRE_NOTE) continue;
         if (i.cmd==DIV_CMD_SAMPLE_BANK) continue;
         if (i.cmd==DIV_CMD_GET_VOLUME) continue;
-        if (i.cmd==DIV_ALWAYS_SET_VOLUME) continue;
         if (i.cmd==DIV_CMD_HINT_VOLUME ||
             i.cmd==DIV_CMD_HINT_PORTA ||
             i.cmd==DIV_CMD_HINT_LEGATO ||
@@ -1080,12 +1606,21 @@ void FurnaceGUI::drawPattern() {
             break;
         }
 
+        if (!e->curSubSong->chanShow[i.chan]) continue;
+
         for (int j=0; j<num; j++) {
+          ImVec2 partPos=ImVec2(
+            off.x+patChanX[i.chan]+fmod(rand(),width),
+            off.y+(ImGui::GetWindowHeight()*0.5f)+randRange(0,patFont->FontSize)
+          );
+
+          if (partPos.x<winMin.x || partPos.y<winMin.y || partPos.x>winMax.x || partPos.y>winMax.y) continue;
+
           particles.push_back(Particle(
             color,
             partIcon,
-            off.x+patChanX[i.chan]+fmod(rand(),width)-scrollX,
-            off.y+(ImGui::GetWindowHeight()*0.5f)+randRange(0,patFont->FontSize),
+            partPos.x,
+            partPos.y,
             (speedX+randRange(-spread,spread))*0.5*dpiScale,
             (speedY+randRange(-spread,spread))*0.5*dpiScale,
             grav,
@@ -1108,22 +1643,29 @@ void FurnaceGUI::drawPattern() {
           col.w*=0.2;
           float width=patChanX[i+1]-patChanX[i];
 
-          particles.push_back(Particle(
-            pitchGrad,
-            (ch->portaNote<=ch->note)?ICON_FA_CHEVRON_DOWN:ICON_FA_CHEVRON_UP,
-            off.x+patChanX[i]+fmod(rand(),width)-scrollX,
-            off.y+fmod(rand(),MAX(1,ImGui::GetWindowHeight())),
-            0.0f,
-            (7.0f+(rand()%5)+pow(ch->portaSpeed,0.7f))*((ch->portaNote<=ch->note)?1:-1),
-            0.0f,
-            1.0f,
-            255.0f,
-            15.0f
-          ));
+          ImVec2 partPos=ImVec2(
+            off.x+patChanX[i]+fmod(rand(),width),
+            off.y+fmod(rand(),MAX(1,ImGui::GetWindowHeight()))
+          );
+
+          if (!(partPos.x<winMin.x || partPos.y<winMin.y || partPos.x>winMax.x || partPos.y>winMax.y)) {
+            particles.push_back(Particle(
+              pitchGrad,
+              (ch->portaNote<=ch->note)?ICON_FA_CHEVRON_DOWN:ICON_FA_CHEVRON_UP,
+              partPos.x,
+              partPos.y,
+              0.0f,
+              (7.0f+(rand()%5)+pow(ch->portaSpeed,0.7f))*((ch->portaNote<=ch->note)?1:-1),
+              0.0f,
+              1.0f,
+              255.0f,
+              15.0f
+            ));
+          }
 
           if (width>0.1) for (float j=-patChanSlideY[i]; j<ImGui::GetWindowHeight(); j+=width*0.7) {
-            ImVec2 tMin=ImVec2(off.x+patChanX[i]-scrollX,off.y+j);
-            ImVec2 tMax=ImVec2(off.x+patChanX[i+1]-scrollX,off.y+j+width*0.6);
+            ImVec2 tMin=ImVec2(off.x+patChanX[i],off.y+j);
+            ImVec2 tMax=ImVec2(off.x+patChanX[i+1],off.y+j+width*0.6);
             if (ch->portaNote<=ch->note) {
               arrowPoints[0]=ImLerp(tMin,tMax,ImVec2(0.1,1.0-0.8));
               arrowPoints[1]=ImLerp(tMin,tMax,ImVec2(0.5,1.0-0.0));
@@ -1158,18 +1700,25 @@ void FurnaceGUI::drawPattern() {
           col.w*=0.2;
           float width=patChanX[i+1]-patChanX[i];
 
-          particles.push_back(Particle(
-            pitchGrad,
-            ICON_FA_GLASS,
-            off.x+patChanX[i]+(width*0.5+0.5*sin(M_PI*(float)ch->vibratoPosGiant/64.0f)*width)-scrollX,
-            off.y+(ImGui::GetWindowHeight()*0.5f)+randRange(0,patFont->FontSize),
-            randRange(-4.0f,4.0f),
-            2.0f*(3.0f+(rand()%5)+ch->vibratoRate),
-            0.4f,
-            1.0f,
-            128.0f,
-            4.0f
-          ));
+          ImVec2 partPos=ImVec2(
+            off.x+patChanX[i]+(width*0.5+0.5*sin(M_PI*(float)ch->vibratoPosGiant/64.0f)*width),
+            off.y+(ImGui::GetWindowHeight()*0.5f)+randRange(0,patFont->FontSize)
+          );
+
+          if (!(partPos.x<winMin.x || partPos.y<winMin.y || partPos.x>winMax.x || partPos.y>winMax.y)) {
+            particles.push_back(Particle(
+              pitchGrad,
+              ICON_FA_GLASS,
+              partPos.x,
+              partPos.y,
+              randRange(-4.0f,4.0f),
+              2.0f*(3.0f+(rand()%5)+ch->vibratoRate),
+              0.4f,
+              1.0f,
+              128.0f,
+              4.0f
+            ));
+          }
         }
       }
 
@@ -1202,7 +1751,7 @@ void FurnaceGUI::drawPattern() {
   }
   ImGui::PopStyleVar();
   if (patternOpen) {
-    if (!inhibitMenu && ImGui::IsItemClicked(ImGuiMouseButton_Right)) ImGui::OpenPopup("patternActionMenu");
+    if (!inhibitMenu && ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows) && ImGui::IsMouseClicked(ImGuiMouseButton_Right)) ImGui::OpenPopup("patternActionMenu");
     if (ImGui::BeginPopup("patternActionMenu",ImGuiWindowFlags_NoMove|ImGuiWindowFlags_AlwaysAutoResize|ImGuiWindowFlags_NoTitleBar|ImGuiWindowFlags_NoSavedSettings)) {
       editOptions(false);
       ImGui::EndPopup();
@@ -1210,7 +1759,5 @@ void FurnaceGUI::drawPattern() {
   }
   if (ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows)) curWindow=GUI_WINDOW_PATTERN;
   ImGui::End();
-  //int delta1=SDL_GetPerformanceCounter();
-  //logV("render time: %dµs",(delta1-delta0)/(SDL_GetPerformanceFrequency()/1000000));
 }
 

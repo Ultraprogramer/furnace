@@ -1,6 +1,6 @@
 /**
  * Furnace Tracker - multi-system chiptune tracker
- * Copyright (C) 2021-2022 tildearrow and contributors
+ * Copyright (C) 2021-2024 tildearrow and contributors
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -21,57 +21,37 @@
 #define _AMIGA_H
 
 #include "../dispatch.h"
-#include <queue>
-#include "../macroInt.h"
+#include "../../fixedQueue.h"
 #include "../waveSynth.h"
 
 class DivPlatformAmiga: public DivDispatch {
-  struct Channel {
-    int freq, baseFreq, pitch, pitch2;
-    unsigned int audLoc;
-    unsigned short audLen;
+  struct Channel: public SharedChannel<signed char> {
+    unsigned short audLen, irLocL, irLocH, irLen;
     unsigned int audPos;
     int audSub;
-    signed char audDat;
+    unsigned char volPos;
     int sample, wave;
-    int ins;
-    int busClock;
-    int note;
-    bool active, insChanged, freqChanged, keyOn, keyOff, inPorta, useWave, setPos, useV, useP;
-    signed char vol, outVol;
-    DivMacroInt std;
+    bool useWave, setPos, useV, useP, dmaOn, audDatClock, writeVol, updateWave;
     DivWaveSynth ws;
-    void macroInit(DivInstrument* which) {
-      std.init(which);
-      pitch2=0;
-    }
     Channel():
-      freq(0),
-      baseFreq(0),
-      pitch(0),
-      pitch2(0),
-      audLoc(0),
+      SharedChannel<signed char>(64),
       audLen(0),
+      irLocL(0),
+      irLocH(0),
+      irLen(2),
       audPos(0),
       audSub(0),
-      audDat(0),
+      volPos(0),
       sample(-1),
       wave(-1),
-      ins(-1),
-      busClock(0),
-      note(0),
-      active(false),
-      insChanged(true),
-      freqChanged(false),
-      keyOn(false),
-      keyOff(false),
-      inPorta(false),
       useWave(false),
       setPos(false),
       useV(false),
       useP(false),
-      vol(64),
-      outVol(64) {}
+      dmaOn(false),
+      audDatClock(false),
+      writeVol(true),
+      updateWave(true) {}
   };
   Channel chan[4];
   DivDispatchOscBuffer* oscBuf[4];
@@ -79,33 +59,113 @@ class DivPlatformAmiga: public DivDispatch {
   bool bypassLimits;
   bool amigaModel;
   bool filterOn;
+  bool updateADKCon;
+  short delay;
+
+  struct Amiga {
+    // register state
+    bool audInt[4]; // interrupt on
+    bool audIr[4]; // interrupt request
+    bool audEn[4]; // audio DMA on
+    bool mustDMA[4]; // audio DMA must run
+    bool useP[4]; // period modulation
+    bool useV[4]; // volume modulation
+
+    bool dmaEn;
+
+    unsigned int audLoc[4]; // address
+    unsigned short audLen[4]; // length
+    unsigned short audPer[4]; // period
+    unsigned char audVol[4]; // volume
+    signed char audDat[2][4]; // data
+    signed char nextOut[4];
+    unsigned short nextOut2[4];
+    
+
+    // internal state
+    int audTick[4]; // tick of period
+    unsigned int dmaLoc[4]; // address
+    unsigned short dmaLen[4]; // position
+
+    bool audByte[4]; // which byte of audDat to output
+    bool audWord[4]; // for P/V
+    bool incLoc[4]; // whether dmaLoc/dmaLen should be updated
+    unsigned char volPos; // position of volume PWM
+    unsigned short hPos; // horizontal position of beam
+    unsigned char state[4]; // current channel state
+
+    void write(unsigned short addr, unsigned short val);
+
+    Amiga() {
+      memset(this,0,sizeof(*this));
+    }
+  } amiga;
 
   int filter[2][4];
   int filtConst;
   int filtConstOff, filtConstOn;
+  int chipMem, chipMask;
+
+  unsigned char volTable[64][64];
+
+  unsigned int sampleOff[256];
+  bool sampleLoaded[256];
+
+  unsigned short regPool[256];
+
+  DivMemoryComposition memCompo;
+
+  unsigned char* sampleMem;
+  size_t sampleMemLen;
 
   int sep1, sep2;
 
+  struct QueuedWrite {
+    unsigned short addr;
+    unsigned short val;
+    QueuedWrite(): addr(0), val(9) {}
+    QueuedWrite(unsigned short a, unsigned short v): addr(a), val(v) {}
+  };
+  FixedQueue<QueuedWrite,512> writes;
+
+  friend void putDispatchChip(void*,int);
   friend void putDispatchChan(void*,int,int);
+  friend class DivExportAmigaValidation;
+
+  void irq(int ch);
+  void rWrite(unsigned short addr, unsigned short val);
+  void updateWave(int ch);
 
   public:
-    void acquire(short* bufL, short* bufR, size_t start, size_t len);
+    void acquire(short** buf, size_t len);
     int dispatch(DivCommand c);
     void* getChanState(int chan);
     DivDispatchOscBuffer* getOscBuffer(int chan);
+    unsigned char* getRegisterPool();
+    int getRegisterPoolSize();
+    int getRegisterPoolDepth();
     void reset();
     void forceIns();
     void tick(bool sysTick=true);
     void muteChannel(int ch, bool mute);
-    bool isStereo();
+    int getOutputCount();
     bool keyOffAffectsArp(int ch);
     DivMacroInt* getChanMacroInt(int ch);
-    void setFlags(unsigned int flags);
+    DivSamplePos getSamplePos(int ch);
+    void setFlags(const DivConfig& flags);
     void notifyInsChange(int ins);
     void notifyWaveChange(int wave);
     void notifyInsDeletion(void* ins);
+    void renderSamples(int chipID);
+    void poke(unsigned int addr, unsigned short val);
+    void poke(std::vector<DivRegWrite>& wlist);
     const char** getRegisterSheet();
-    int init(DivEngine* parent, int channels, int sugRate, unsigned int flags);
+    const void* getSampleMem(int index=0);
+    size_t getSampleMemCapacity(int index=0);
+    size_t getSampleMemUsage(int index=0);
+    bool isSampleLoaded(int index, int sample);
+    const DivMemoryComposition* getMemCompo(int index);
+    int init(DivEngine* parent, int channels, int sugRate, const DivConfig& flags);
     void quit();
 };
 

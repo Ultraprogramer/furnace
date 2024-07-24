@@ -1,6 +1,6 @@
 /**
  * Furnace Tracker - multi-system chiptune tracker
- * Copyright (C) 2021-2022 tildearrow and contributors
+ * Copyright (C) 2021-2024 tildearrow and contributors
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -19,47 +19,29 @@
 
 #ifndef _OPLL_H
 #define _OPLL_H
+
 #include "../dispatch.h"
-#include "../macroInt.h"
-#include <queue>
+#include "../../fixedQueue.h"
 
 extern "C" {
 #include "../../../extern/Nuked-OPLL/opll.h"
 }
+#include "../../../extern/emu2413/emu2413.h"
 
 class DivPlatformOPLL: public DivDispatch {
   protected:
-    struct Channel {
+    struct Channel: public SharedChannel<int> {
       DivInstrumentFM state;
-      DivMacroInt std;
       unsigned char freqH, freqL;
-      int freq, baseFreq, pitch, pitch2, note, ins, fixedFreq;
-      bool active, insChanged, freqChanged, keyOn, keyOff, portaPause, furnaceDac, inPorta;
-      int vol, outVol;
+      int fixedFreq;
+      bool furnaceDac;
       unsigned char pan;
-      void macroInit(DivInstrument* which) {
-        std.init(which);
-        pitch2=0;
-      }
       Channel():
+        SharedChannel<int>(0),
         freqH(0),
         freqL(0),
-        freq(0),
-        baseFreq(0),
-        pitch(0),
-        pitch2(0),
-        note(0),
-        ins(-1),
         fixedFreq(0),
-        active(false),
-        insChanged(true),
-        freqChanged(false),
-        keyOn(false),
-        keyOff(false),
-        portaPause(false),
         furnaceDac(false),
-        inPorta(false),
-        vol(0),
         pan(3) {}
     };
     Channel chan[11];
@@ -69,20 +51,28 @@ class DivPlatformOPLL: public DivDispatch {
       unsigned short addr;
       unsigned char val;
       bool addrOrVal;
+      QueuedWrite(): addr(0), val(0), addrOrVal(false) {}
       QueuedWrite(unsigned short a, unsigned char v): addr(a), val(v), addrOrVal(false) {}
     };
-    std::queue<QueuedWrite> writes;
+    FixedQueue<QueuedWrite,512> writes;
     opll_t fm;
+    OPLL* fm_emu;
     int delay, lastCustomMemory;
     unsigned char lastBusy;
     unsigned char drumState;
     unsigned char drumVol[5];
+    bool drumActivated[5];
+    
+    // -1: undefined
+    // 0: snare/tom
+    // 1: hi-hat/top
+    signed char lastFreqSH, lastFreqTT;
 
     unsigned char regPool[256];
 
-    bool useYMFM;
-    bool drums;
-    bool properDrums, properDrumsSys;
+    unsigned char selCore;
+    bool crapDrums;
+    bool properDrums, properDrumsSys, noTopHatFreq, fixedAll;
     bool vrc7;
 
     unsigned char patchSet;
@@ -92,37 +82,45 @@ class DivPlatformOPLL: public DivDispatch {
 
     int octave(int freq);
     int toFreq(int freq);
+    void commitState(int ch, DivInstrument* ins);
+    void switchMode(bool mode);
 
+    friend void putDispatchChip(void*,int);
     friend void putDispatchChan(void*,int,int);
 
-    void acquire_nuked(short* bufL, short* bufR, size_t start, size_t len);
-    void acquire_ymfm(short* bufL, short* bufR, size_t start, size_t len);
+    void acquire_nuked(short** buf, size_t len);
+    void acquire_ymfm(short** buf, size_t len);
+    void acquire_emu(short** buf, size_t len);
   
   public:
-    void acquire(short* bufL, short* bufR, size_t start, size_t len);
+    void acquire(short** buf, size_t len);
     int dispatch(DivCommand c);
     void* getChanState(int chan);
     DivMacroInt* getChanMacroInt(int ch);
     DivDispatchOscBuffer* getOscBuffer(int chan);
+    int mapVelocity(int ch, float vel);
+    float getGain(int ch, int vol);
     unsigned char* getRegisterPool();
     int getRegisterPoolSize();
     void reset();
     void forceIns();
     void tick(bool sysTick=true);
     void muteChannel(int ch, bool mute);
-    void setYMFM(bool use);
+    void setCore(unsigned char which);
     bool keyOffAffectsArp(int ch);
     bool keyOffAffectsPorta(int ch);
+    bool getLegacyAlwaysSetVolume();
+    float getPostAmp();
     void toggleRegisterDump(bool enable);
     void setVRC7(bool vrc);
     void setProperDrums(bool pd);
-    void setFlags(unsigned int flags);
+    void setFlags(const DivConfig& flags);
     void notifyInsChange(int ins);
     void notifyInsDeletion(void* ins);
     int getPortaFloor(int ch);
     void poke(unsigned int addr, unsigned short val);
     void poke(std::vector<DivRegWrite>& wlist);
-    int init(DivEngine* parent, int channels, int sugRate, unsigned int flags);
+    int init(DivEngine* parent, int channels, int sugRate, const DivConfig& flags);
     void quit();
     ~DivPlatformOPLL();
 };

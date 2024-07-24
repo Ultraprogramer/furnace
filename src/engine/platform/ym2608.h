@@ -1,6 +1,6 @@
 /**
  * Furnace Tracker - multi-system chiptune tracker
- * Copyright (C) 2021-2022 tildearrow and contributors
+ * Copyright (C) 2021-2024 tildearrow and contributors
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -19,9 +19,12 @@
 
 #ifndef _YM2608_H
 #define _YM2608_H
+
 #include "fmshared_OPN.h"
-#include "../macroInt.h"
 #include "sound/ymfm/ymfm_opn.h"
+extern "C" {
+#include "../../../extern/YM2608-LLE/fmopna_2608.h"
+}
 
 #include "ay.h"
 
@@ -44,76 +47,56 @@ class DivPlatformYM2608: public DivPlatformOPN {
       0, 1, 2, 4, 5, 6
     };
 
-    struct Channel {
-      DivInstrumentFM state;
-      unsigned char freqH, freqL;
-      int freq, baseFreq, pitch, pitch2, portaPauseFreq, note, ins;
-      unsigned char psgMode, autoEnvNum, autoEnvDen, opMask;
-      signed char konCycles;
-      bool active, insChanged, freqChanged, keyOn, keyOff, portaPause, inPorta, furnacePCM, hardReset, opMaskChanged;
-      int vol, outVol;
-      int sample;
-      unsigned char pan;
-      DivMacroInt std;
-      void macroInit(DivInstrument* which) {
-        std.init(which);
-        pitch2=0;
-      }
-      Channel():
-        freqH(0),
-        freqL(0),
-        freq(0),
-        baseFreq(0),
-        pitch(0),
-        pitch2(0),
-        portaPauseFreq(0),
-        note(0),
-        ins(-1),
-        psgMode(1),
-        autoEnvNum(0),
-        autoEnvDen(0),
-        opMask(15),
-        active(false),
-        insChanged(true),
-        freqChanged(false),
-        keyOn(false),
-        keyOff(false),
-        portaPause(false),
-        inPorta(false),
-        furnacePCM(false),
-        hardReset(false),
-        opMaskChanged(false),
-        vol(0),
-        outVol(15),
-        sample(-1),
-        pan(3) {}
-    };
-    Channel chan[16];
+    OPNChannelStereo chan[16];
     DivDispatchOscBuffer* oscBuf[16];
     bool isMuted[16];
+    ym3438_t fm_nuked;
     ymfm::ym2608* fm;
     ymfm::ym2608::output_data fmout;
+    fmopna_t fm_lle;
+    unsigned int dacVal;
+    unsigned int dacVal2;
+    int dacOut[2];
+    int rssOut[6];
+    bool lastSH;
+    bool lastSH2;
+    bool lastS;
+    unsigned char cas, ras, rssCycle, rssSubCycle;
+    unsigned int adMemAddr;
 
     unsigned char* adpcmBMem;
     size_t adpcmBMemLen;
     DivYM2608Interface iface;
+    unsigned int sampleOffB[256];
+    bool sampleLoaded[256];
   
     DivPlatformAY8910* ay;
     unsigned char sampleBank;
     unsigned char writeRSSOff, writeRSSOn;
+    int globalRSSVolume;
 
-    bool extMode;
-    unsigned char prescale;
+    bool extMode, noExtMacros;
+    unsigned char prescale, nukedMult;
+
+    DivMemoryComposition memCompo;
   
     double NOTE_OPNB(int ch, int note);
     double NOTE_ADPCMB(int note);
-    friend void putDispatchChan(void*,int,int);
-  
+
+    friend void putDispatchChip(void*,int);
+
+    inline void commitState(int ch, DivInstrument* ins);
+
+    void acquire_combo(short** buf, size_t len);
+    void acquire_ymfm(short** buf, size_t len);
+    void acquire_lle(short** buf, size_t len);
+
   public:
-    void acquire(short* bufL, short* bufR, size_t start, size_t len);
+    void acquire(short** buf, size_t len);
     int dispatch(DivCommand c);
     void* getChanState(int chan);
     DivMacroInt* getChanMacroInt(int ch);
+    virtual unsigned short getPan(int chan);
     DivDispatchOscBuffer* getOscBuffer(int chan);
     unsigned char* getRegisterPool();
     int getRegisterPoolSize();
@@ -121,10 +104,10 @@ class DivPlatformYM2608: public DivPlatformOPN {
     void forceIns();
     void tick(bool sysTick=true);
     void muteChannel(int ch, bool mute);
-    bool isStereo();
+    int getOutputCount();
     bool keyOffAffectsArp(int ch);
     void notifyInsChange(int ins);
-    void notifyInsDeletion(void* ins);
+    virtual void notifyInsDeletion(void* ins);
     void setSkipRegisterWrites(bool val);
     void poke(unsigned int addr, unsigned short val);
     void poke(std::vector<DivRegWrite>& wlist);
@@ -132,12 +115,14 @@ class DivPlatformYM2608: public DivPlatformOPN {
     const void* getSampleMem(int index);
     size_t getSampleMemCapacity(int index);
     size_t getSampleMemUsage(int index);
-    void renderSamples();
-    void setFlags(unsigned int flags);
-    int init(DivEngine* parent, int channels, int sugRate, unsigned int flags);
+    bool isSampleLoaded(int index, int sample);
+    const DivMemoryComposition* getMemCompo(int index);
+    void renderSamples(int chipID);
+    void setFlags(const DivConfig& flags);
+    int init(DivEngine* parent, int channels, int sugRate, const DivConfig& flags);
     void quit();
     DivPlatformYM2608():
-      DivPlatformOPN(9440540.0, 72, 32),
+      DivPlatformOPN(2, 6, 9, 15, 16, 9440540.0, 72, 32),
       prescale(0x2d) {}
     ~DivPlatformYM2608();
 };

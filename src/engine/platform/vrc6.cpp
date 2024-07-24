@@ -1,6 +1,6 @@
 /**
  * Furnace Tracker - multi-system chiptune tracker
- * Copyright (C) 2021-2022 tildearrow and contributors
+ * Copyright (C) 2021-2024 tildearrow and contributors
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -22,7 +22,7 @@
 #include <cstddef>
 #include <math.h>
 
-#define rWrite(a,v) if (!skipRegisterWrites) {writes.emplace(a,v); if (dumpWrites) {addWrite(a,v);} }
+#define rWrite(a,v) if (!skipRegisterWrites) {writes.push(QueuedWrite(a,v)); if (dumpWrites) {addWrite(a,v);} }
 #define chWrite(c,a,v) rWrite(0x9000+(c<<12)+(a&3),v)
 
 const char* regCheatSheetVRC6[]={
@@ -46,15 +46,15 @@ const char** DivPlatformVRC6::getRegisterSheet() {
   return regCheatSheetVRC6;
 }
 
-void DivPlatformVRC6::acquire(short* bufL, short* bufR, size_t start, size_t len) {
-  for (size_t i=start; i<start+len; i++) {
+void DivPlatformVRC6::acquire(short** buf, size_t len) {
+  for (size_t i=0; i<len; i++) {
     // PCM part
     for (int i=0; i<2; i++) {
       if (chan[i].pcm && chan[i].dacSample!=-1) {
         chan[i].dacPeriod+=chan[i].dacRate;
         if (chan[i].dacPeriod>rate) {
           DivSample* s=parent->getSample(chan[i].dacSample);
-          if (s->samples<=0) {
+          if (s->samples<=0 || chan[i].dacPos>=s->samples) {
             chan[i].dacSample=-1;
             chWrite(i,0,0);
             continue;
@@ -65,7 +65,7 @@ void DivPlatformVRC6::acquire(short* bufL, short* bufR, size_t start, size_t len
             chWrite(i,0,0x80|chan[i].dacOut);
           }
           chan[i].dacPos++;
-          if (s->isLoopable() && chan[i].dacPos>=s->getEndPosition()) {
+          if (s->isLoopable() && chan[i].dacPos>=(unsigned int)s->loopEnd) {
             chan[i].dacPos=s->loopStart;
           } else if (chan[i].dacPos>=s->samples) {
             chan[i].dacSample=-1;
@@ -81,14 +81,15 @@ void DivPlatformVRC6::acquire(short* bufL, short* bufR, size_t start, size_t len
     int sample=vrc6.out()<<9; // scale to 16 bit
     if (sample>32767) sample=32767;
     if (sample<-32768) sample=-32768;
-    bufL[i]=bufR[i]=sample;
+    buf[0][i]=sample;
 
     // Oscilloscope buffer part
     if (++writeOscBuf>=32) {
       writeOscBuf=0;
-      for (int i=0; i<3; i++) {
-        oscBuf[i]->data[oscBuf[i]->needle++]=vrc6.chan_out(i)<<10;
+      for (int i=0; i<2; i++) {
+        oscBuf[i]->data[oscBuf[i]->needle++]=vrc6.pulse_out(i)<<11;
       }
+      oscBuf[2]->data[oscBuf[2]->needle++]=vrc6.sawtooth_out()<<10;
     }
 
     // Command part
@@ -151,7 +152,9 @@ void DivPlatformVRC6::tick(bool sysTick) {
         }
       }
     }
-    if (chan[i].std.arp.had) {
+    if (NEW_ARP_STRAT) {
+      chan[i].handleArp();
+    } else if (chan[i].std.arp.had) {
       if (!chan[i].inPorta) {
         chan[i].baseFreq=NOTE_PERIODIC(parent->calcArp(chan[i].note,chan[i].std.arp.val));
       }
@@ -172,11 +175,32 @@ void DivPlatformVRC6::tick(bool sysTick) {
       }
       chan[i].freqChanged=true;
     }
+    if (chan[i].std.phaseReset.had) {
+      if (chan[i].std.phaseReset.val && chan[i].active) {
+        if ((i!=2) && (!chan[i].pcm)) {
+          if (dumpWrites) addWrite(0xffff0002+(i<<8),0);
+          if (chan[i].dacSample<0 || chan[i].dacSample>=parent->song.sampleLen) {
+            if (dumpWrites) {
+              chWrite(i,2,0x80);
+              chWrite(i,0,isMuted[i]?0:0x80);
+              addWrite(0xffff0000+(i<<8),chan[i].dacSample);
+            }
+            if (chan[i].setPos) {
+              chan[i].setPos=false;
+            } else {
+              chan[i].dacPos=0;
+            }
+            chan[i].dacPeriod=0;
+            chan[i].keyOn=true;
+          }
+        }
+      }
+    }
     if (chan[i].freqChanged || chan[i].keyOn || chan[i].keyOff) {
       if (i==2) { // sawtooth
-        chan[i].freq=parent->calcFreq(chan[i].baseFreq,chan[i].pitch,true,0,chan[i].pitch2,chipClock,14)-1;
+        chan[i].freq=parent->calcFreq(chan[i].baseFreq,chan[i].pitch,chan[i].fixedArp?chan[i].baseNoteOverride:chan[i].arpOff,chan[i].fixedArp,true,0,chan[i].pitch2,chipClock,14)-1;
       } else { // pulse
-        chan[i].freq=parent->calcFreq(chan[i].baseFreq,chan[i].pitch,true,0,chan[i].pitch2,chipClock,16)-1;
+        chan[i].freq=parent->calcFreq(chan[i].baseFreq,chan[i].pitch,chan[i].fixedArp?chan[i].baseNoteOverride:chan[i].arpOff,chan[i].fixedArp,true,0,chan[i].pitch2,chipClock,16)-1;
         if (chan[i].furnaceDac) {
           double off=1.0;
           if (chan[i].dacSample>=0 && chan[i].dacSample<parent->song.sampleLen) {
@@ -212,15 +236,25 @@ int DivPlatformVRC6::dispatch(DivCommand c) {
     case DIV_CMD_NOTE_ON:
       if (c.chan!=2) { // pulse wave
         DivInstrument* ins=parent->getIns(chan[c.chan].ins,DIV_INS_VRC6);
-        if (ins->type==DIV_INS_AMIGA) {
+        if (ins->type==DIV_INS_AMIGA || ins->amiga.useSample) {
           chan[c.chan].pcm=true;
         } else if (chan[c.chan].furnaceDac) {
           chan[c.chan].pcm=false;
+          chan[c.chan].sampleNote=DIV_NOTE_NULL;
+          chan[c.chan].sampleNoteDelta=0;
         }
         if (chan[c.chan].pcm) {
           if (skipRegisterWrites) break;
-          if (ins->type==DIV_INS_AMIGA) {
-            chan[c.chan].dacSample=ins->amiga.getSample(c.value);
+          if (ins->type==DIV_INS_AMIGA || ins->amiga.useSample) {
+            if (c.value!=DIV_NOTE_NULL) {
+              chan[c.chan].dacSample=ins->amiga.getSample(c.value);
+              chan[c.chan].sampleNote=c.value;
+              c.value=ins->amiga.getFreq(c.value);
+              chan[c.chan].sampleNoteDelta=c.value-chan[c.chan].sampleNote;
+            } else if (chan[c.chan].sampleNote!=DIV_NOTE_NULL) {
+              chan[c.chan].dacSample=ins->amiga.getSample(chan[c.chan].sampleNote);
+              c.value=ins->amiga.getFreq(chan[c.chan].sampleNote);
+            }
             if (chan[c.chan].dacSample<0 || chan[c.chan].dacSample>=parent->song.sampleLen) {
               chan[c.chan].dacSample=-1;
               if (dumpWrites) addWrite(0xffff0002+(c.chan<<8),0);
@@ -232,7 +266,11 @@ int DivPlatformVRC6::dispatch(DivCommand c) {
                 addWrite(0xffff0000+(c.chan<<8),chan[c.chan].dacSample);
               }
             }
-            chan[c.chan].dacPos=0;
+            if (chan[c.chan].setPos) {
+              chan[c.chan].setPos=false;
+            } else {
+              chan[c.chan].dacPos=0;
+            }
             chan[c.chan].dacPeriod=0;
             if (c.value!=DIV_NOTE_NULL) {
               chan[c.chan].baseFreq=NOTE_PERIODIC(c.value);
@@ -247,6 +285,8 @@ int DivPlatformVRC6::dispatch(DivCommand c) {
             //chan[c.chan].keyOn=true;
             chan[c.chan].furnaceDac=true;
           } else {
+            chan[c.chan].sampleNote=DIV_NOTE_NULL;
+            chan[c.chan].sampleNoteDelta=0;
             if (c.value!=DIV_NOTE_NULL) {
               chan[c.chan].note=c.value;
             }
@@ -258,7 +298,11 @@ int DivPlatformVRC6::dispatch(DivCommand c) {
             } else {
               if (dumpWrites) addWrite(0xffff0000+(c.chan<<8),chan[c.chan].dacSample);
             }
-            chan[c.chan].dacPos=0;
+            if (chan[c.chan].setPos) {
+              chan[c.chan].setPos=false;
+            } else {
+              chan[c.chan].dacPos=0;
+            }
             chan[c.chan].dacPeriod=0;
             chan[c.chan].dacRate=parent->getSample(chan[c.chan].dacSample)->rate;
             if (dumpWrites) {
@@ -291,6 +335,8 @@ int DivPlatformVRC6::dispatch(DivCommand c) {
       chan[c.chan].dacSample=-1;
       if (dumpWrites) addWrite(0xffff0002+(c.chan<<8),0);
       chan[c.chan].pcm=false;
+      chan[c.chan].sampleNote=DIV_NOTE_NULL;
+      chan[c.chan].sampleNoteDelta=0;
       chan[c.chan].active=false;
       chan[c.chan].keyOff=true;
       chan[c.chan].macroInit(NULL);
@@ -329,7 +375,7 @@ int DivPlatformVRC6::dispatch(DivCommand c) {
       chan[c.chan].freqChanged=true;
       break;
     case DIV_CMD_NOTE_PORTA: {
-      int destFreq=NOTE_PERIODIC(c.value2);
+      int destFreq=NOTE_PERIODIC(c.value2+chan[c.chan].sampleNoteDelta);
       bool return2=false;
       if (destFreq>chan[c.chan].baseFreq) {
         chan[c.chan].baseFreq+=c.value;
@@ -359,6 +405,10 @@ int DivPlatformVRC6::dispatch(DivCommand c) {
     case DIV_CMD_SAMPLE_MODE:
       if (c.chan!=2) { // pulse
         chan[c.chan].pcm=c.value;
+        if (!chan[c.chan].pcm) {
+          chan[c.chan].sampleNote=DIV_NOTE_NULL;
+          chan[c.chan].sampleNoteDelta=0;
+        }
       }
       break;
     case DIV_CMD_SAMPLE_BANK:
@@ -367,8 +417,12 @@ int DivPlatformVRC6::dispatch(DivCommand c) {
         sampleBank=parent->song.sample.size()/12;
       }
       break;
+    case DIV_CMD_SAMPLE_POS:
+      chan[c.chan].dacPos=c.value;
+      chan[c.chan].setPos=true;
+      break;
     case DIV_CMD_LEGATO:
-      chan[c.chan].baseFreq=NOTE_PERIODIC(c.value+((chan[c.chan].std.arp.will && !chan[c.chan].std.arp.mode)?(chan[c.chan].std.arp.val):(0)));
+      chan[c.chan].baseFreq=NOTE_PERIODIC(c.value+chan[c.chan].sampleNoteDelta+((HACKY_LEGATO_MESS)?(chan[c.chan].std.arp.val):(0)));
       chan[c.chan].freqChanged=true;
       chan[c.chan].note=c.value;
       break;
@@ -376,15 +430,21 @@ int DivPlatformVRC6::dispatch(DivCommand c) {
       if (chan[c.chan].active && c.value2) {
         if (parent->song.resetMacroOnPorta) chan[c.chan].macroInit(parent->getIns(chan[c.chan].ins,DIV_INS_VRC6));
       }
-      if (!chan[c.chan].inPorta && c.value && !parent->song.brokenPortaArp && chan[c.chan].std.arp.will) chan[c.chan].baseFreq=NOTE_PERIODIC(chan[c.chan].note);
+      if (!chan[c.chan].inPorta && c.value && !parent->song.brokenPortaArp && chan[c.chan].std.arp.will && !NEW_ARP_STRAT) chan[c.chan].baseFreq=NOTE_PERIODIC(chan[c.chan].note);
       chan[c.chan].inPorta=c.value;
       break;
     case DIV_CMD_GET_VOLMAX:
       if (c.chan==2) return 63; // sawtooth has 6 bit volume
       return 15; // pulse has 4 bit volume
       break;
-    case DIV_ALWAYS_SET_VOLUME:
-      return 1;
+    case DIV_CMD_MACRO_OFF:
+      chan[c.chan].std.mask(c.value,true);
+      break;
+    case DIV_CMD_MACRO_ON:
+      chan[c.chan].std.mask(c.value,false);
+      break;
+    case DIV_CMD_MACRO_RESTART:
+      chan[c.chan].std.restart(c.value);
       break;
     default:
       break;
@@ -418,6 +478,16 @@ void* DivPlatformVRC6::getChanState(int ch) {
 
 DivMacroInt* DivPlatformVRC6::getChanMacroInt(int ch) {
   return &chan[ch].std;
+}
+
+DivSamplePos DivPlatformVRC6::getSamplePos(int ch) {
+  if (ch>=2) return DivSamplePos();
+  if (!chan[ch].pcm) return DivSamplePos();
+  return DivSamplePos(
+    chan[ch].dacSample,
+    chan[ch].dacPos,
+    chan[ch].dacRate
+  );
 }
 
 DivDispatchOscBuffer* DivPlatformVRC6::getOscBuffer(int ch) {
@@ -459,15 +529,17 @@ bool DivPlatformVRC6::keyOffAffectsArp(int ch) {
   return true;
 }
 
-void DivPlatformVRC6::setFlags(unsigned int flags) {
-  if (flags==2) { // Dendy
-    rate=COLOR_PAL*2.0/5.0;
-  } else if (flags==1) { // PAL
-    rate=COLOR_PAL*3.0/8.0;
+void DivPlatformVRC6::setFlags(const DivConfig& flags) {
+  int clockSel=flags.getInt("clockSel",0);
+  if (clockSel==2) { // Dendy
+    chipClock=COLOR_PAL*2.0/5.0;
+  } else if (clockSel==1) { // PAL
+    chipClock=COLOR_PAL*3.0/8.0;
   } else { // NTSC
-    rate=COLOR_NTSC/2.0;
+    chipClock=COLOR_NTSC/2.0;
   }
-  chipClock=rate;
+  CHECK_CUSTOM_CLOCK;
+  rate=chipClock;
   for (int i=0; i<3; i++) {
     oscBuf[i]->rate=rate/32;
   }
@@ -487,7 +559,7 @@ void DivPlatformVRC6::poke(std::vector<DivRegWrite>& wlist) {
   for (DivRegWrite& i: wlist) rWrite(i.addr,i.val);
 }
 
-int DivPlatformVRC6::init(DivEngine* p, int channels, int sugRate, unsigned int flags) {
+int DivPlatformVRC6::init(DivEngine* p, int channels, int sugRate, const DivConfig& flags) {
   parent=p;
   dumpWrites=false;
   skipRegisterWrites=false;
